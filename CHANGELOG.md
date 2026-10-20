@@ -1,5 +1,20 @@
 # Changelog
 
+## D3D8GL readback diagnosis (2026-10-20)
+
+- Added `RECOMP_D3D8GL_DUMP_READBACK` diagnostics to the GL readback path.
+- Readback reports `err=0`, the correct 640x480 guest surface and GL target
+  texture, but the first pixel is `0x00000000` and the dumped BMP is entirely
+  black. This is not merely the framebuffer-window copy: the GL render target
+  itself is black after the HLE frame.
+- The standalone `d3d8gl --gpu-test` FVF triangle/indexed/readback test still
+  passes ("real GPU FVF triangles, indexed quads and mutable texture readback
+  passed"), so the GL device/readback machinery is alive.
+- Therefore the remaining bug is in the HLE draw/state path feeding the
+  programmable/UP draw, not in `glReadPixels` or the framebuffer window.
+- Current HLE frame rate remains ~40 fps in the courtyard, but it is not
+  visually valid.
+
 ## Xbox D3D8 HLE probe - faster but not visually correct (2026-10-20)
 
 - Ran the existing device-level HLE (`RECOMP_D3D8GL=1`, `--backend d3d8gl`)

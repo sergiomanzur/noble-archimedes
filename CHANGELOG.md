@@ -1,5 +1,190 @@
 # Changelog
 
+## Xbox benchmark harness and Phase 0/1 analysis - 2026-10-19
+
+- Added `xbox/tools/bench.py`, a scripted, repeatable per-scene benchmark.
+  It drives title, main menu, in-engine cutscene, courtyard, pause state and
+  post-movement courtyard intervals; parses `[PACE]`, `[GPU-PERF]`,
+  `[GPU-FLUSH]`, `[GPU-PLAN]`, `[BENCH]`, `[TICK]` and `[UNIQUE]`; captures a
+  screenshot per scene; and compares them with an 8-count per-pixel threshold.
+  Baselines and captures live under gitignored `xbox/bench/`.
+- Added opt-in benchmark probes: `RECOMP_BENCH_STATS` (guest `KeTickCount`,
+  host vblank and a monotonic run clock) and `RECOMP_BENCH_UNIQUE` (downsampled
+  framebuffer hash, so re-presented duplicate images are visible).
+- Three-run software median (default, no renderer switches):
+  title 54 fps, main menu 34 fps (static UI; 51% unique), cutscene 50 fps,
+  courtyard-light 26 fps, pause state 43.5 fps, courtyard-heavy 26 fps,
+  post-movement courtyard 27 fps. The 1% low is 0.5-2 fps below the median;
+  the 3D scenes are 100% unique.
+- The first courtyard does **not** show the 30 Hz movie flag; the host pacer is
+  60 fps and the guest clock is stretched to 0.85-0.93 s/s by rendering. The
+  requested native-30 Hz scene check remains open for later areas.
+- Profile (Release + PDB, 10 s sampling): 7.36 cores total; one raster worker
+  0.98 core, twelve pool workers ~0.5 core each, main/guest thread 0.56 core.
+  Hot symbols on the raster worker: `xf_rows` 25.3%, ntdll waits/locks 33.1%,
+  `nv2a_rc_eval_plan` 5.5%, `nv2a_vsh_run` 4.6%, `nv2a_pb_exec_method` 3.9%,
+  `raster_xf_triangle` 3.7%, `prepare_p8_draw_textures` 3.5%.
+- Open harness caveats recorded in `docs/xbox_60fps_analysis.md`: the pause
+  overlay is not captured by the framebuffer window (the 3D background is),
+  the combat/Innocent Devil scene was not reached without a save, and the boot
+  XMV is not captured by this framebuffer path. These must be fixed before
+  claiming those scenes.
+- No default renderer change. The previously attempted D3D11 batching/static
+  texture experiments remain opt-in and are not the default; the software
+  path is still the only visually verified courtyard path.
+- Host regressions: **19/19 pass** in the current tree, including the new
+  `bench-harness` parsing/scene test. (The changelog's earlier "9/9" count
+  predates the GPU/texture/stencil tests already present in `xbox/tests`.)
+
+## Xbox host development snapshot - 2026-10-19
+
+This pass targets the local Xbox static recompilation host (`xbox/` and the
+`tools/xboxrecomp` runtime). Measured with the hidden framebuffer window's own
+frame counter, same machine and assets:
+
+| Scene | Path | Before | After |
+| --- | --- | ---: | ---: |
+| Title screen / main menu | software | ~28-36 fps | **58-61 fps** |
+| Title screen / main menu | D3D11 (`RECOMP_GPU_RASTER=1`) | n/a | **57-59 fps, visually correct** |
+| Options / pause menu | software | ~30 fps | **~56 fps** |
+| 3D courtyard gameplay | software | 6-9 fps | **21-36 fps** (scene-dependent) |
+| 3D courtyard gameplay | D3D11 | n/a | 21-32 fps (per-triangle; slower) |
+
+Host regressions: **9/9 pass** (`ctest --test-dir xbox/build-tests -C Release`).
+
+### What changed
+
+- **Deferred, state-captured raster queue.** Triangles are queued with their
+  own blend/depth/alpha/color-mask/clip state and a private copy of the
+  texture stages and register-combiner block. The queue is flushed in
+  row-parallel order at target changes, blits, clears, full-screen copies and
+  flips instead of once per draw. This removes the main thread's serial
+  per-draw pixel work and lets the whole frame use the worker pool.
+- **Parallel vertex-program execution.** The NV2A vertex-program interpreter
+  runs per vertex across the raster pool instead of serially on the executor
+  thread. In the measured scene this moved vertex time from ~25 ms/frame to
+  well under the pixel budget.
+- **Invisible-pass elimination.** Batches that write neither colour nor depth
+  and do not count visibility are skipped. Castlevania's stencil shadow-volume
+  passes have this shape and were consuming tens of milliseconds per frame
+  while writing no pixels. Stencil itself is still not implemented.
+- **Face culling.** The software rasteriser now honours the title's
+  `SET_CULL_FACE_ENABLE`, `SET_CULL_FACE` and `SET_FRONT_FACE` state, including
+  the alternating winding of triangle strips. Roughly half of the courtyard's
+  submitted triangles are back-facing and are now rejected before the pixel
+  loop, which alone lifted gameplay from ~19-25 fps to ~28-36 fps.
+- **Direct presentation-copy path.** The final full-screen linear-32-bit copy
+  is an affine row copy with the horizontal bilinear weight known to be zero,
+  dispatched across the pool, instead of running four generic taps per pixel.
+- **P8 texture cache.** 64 entries with frame-generation validation instead of
+  16 entries and a full-image comparison per draw. The cache now survives the
+  world's working set; on the measured scene it fell from ~38 ms/frame to
+  under 1 ms/frame. `RECOMP_P8_EXACT=1` restores exact per-use validation.
+- **Build/runtime defaults.** The kernel is compiled with AVX2 on this host;
+  the raster pool defaults to 12 threads (`RECOMP_RASTER_THREADS` overrides).
+  Diagnostic switches: `RECOMP_NO_FAST_PRESENT`, `RECOMP_NO_P8_CACHE`,
+  `RECOMP_RASTER_MIN_WORK`, `RECOMP_SLOW_DRAW_US`, `RECOMP_GPU_STATS`.
+- **D3D11 frontend rasteriser is now correct.** `xbox/src/nv2a_gpu_d3d11.c`
+  accepts every exact combiner plan (1-9), passes all four texture stages and
+  the prepared plan constants, and honours depth/blend/alpha/culling. Two
+  bugs were fixed this pass: the pixel-shader constant buffer was declared at
+  `b1` but bound at slot 0, so every plan silently read zero; and the title's
+  multiply/alpha background relies on a black destination, not a white clear.
+  Full-screen presentation/copy quads stay on the CPU because they read a
+  front/video buffer the GPU path does not own. With `RECOMP_GPU_RASTER=1` the
+  entire title/menu renders correctly at 57-59 fps. The 3D path renders but is
+  slower than the software rasteriser (one D3D11 draw per triangle); a batched
+  submission attempt was reverted, so the software path remains the default.
+
+### Remaining
+
+- 60 fps *3D gameplay* is still not reached. The software pixel shader and VSH
+  interpreter are the limit at ~21-36 fps; the current D3D11 path needs batched
+  draw submission (or a GPU vertex path) before it can beat the CPU.
+- Stencil shadows are not implemented, so black shadow-volume geometry remains
+  on the courtyard floor and clothes.
+- The game itself runs its 3D scenes at a 30 Hz cadence in several areas; the
+  measured 56 fps pause menu and 58-61 fps title show the host can run the
+  lighter screens at 60.
+- Diagnostic: `RECOMP_PACE_OFF=1` raises the 2D menus to 80-100 fps but leaves
+  the 3D scene at 19-33 fps, so 3D is CPU/queue-bound rather than limited by
+  the host's frame pacing. `RECOMP_PACE_FPS` / `RECOMP_PACE_OFF` remain useful
+  for measuring that split.
+- **Stencil diagnostic.** `RECOMP_SKIP_STENCIL=1` raises the measured 3D
+  scene from ~20-32 fps to ~47-53 fps, but removes the stencil-driven scene
+  itself: the game's main 3D passes are stencil-enabled, and the software
+  rasteriser has no stencil buffer. This confirms the shadow/stencil passes
+  are a dominant part of the 3D draw count and that stencil must be
+  implemented correctly before stencil work can be skipped or masked.
+- **D3D11 stencil attempt.** Added a D24S8 target, stencil test/ops, masks,
+  reference and clear to the GPU backend. It drew the scene but rejected the
+  HUD and did not remove the black shadow polygons (the title's front/back
+  winding and cull/ref combination need more work), so it was reverted. The
+  stable D3D11 backend remains the non-stencil one.
+- **CPU stencil implementation.** Added a per-zeta stencil buffer, clear,
+  test/ops/masks/reference, and corrected the invisible-pass rule so
+  stencil-only shadow passes are not discarded when stencil is active. It is
+  behind `RECOMP_CPU_STENCIL=1` because the measured cost is high: the 3D
+  scene falls to ~12-18 fps when the stencil-only passes run, and the HUD's
+  stencil/ref combination still needs work. The default remains the previous
+  skip, with the black shadow polygons.
+- Prototyped **batched D3D11 submission** and **deferred per-frame readback**.
+  After fixing the batch key to ignore the per-triangle combiner pointer and
+  plan padding, batching still did not beat the software path; the 3D scene is
+  dominated by the CPU-side executor, texture/sync work and the single-surface
+  readback, not the number of D3D11 draw calls alone. Deferring readback broke
+  the title's double-buffer/present ordering (the castle background appeared
+  without the logo/text), so both experiments were reverted. A display-buffer-
+  aware present (readback once to the actual presented surface, or present the
+  D3D11 target directly) is the prerequisite for making either one a win.
+
+### Stencil / black-polygon follow-up (2026-10-19)
+
+- Added a stencil trace to RECOMP_FRAME_TRACE: plan kind, stencil enable,
+  function, reference, read/write masks and fail/zfail/zpass ops.
+- The black rectangles are **not** the stencil shadow pass. In the traced 3D
+  frame the black-area draws are plan 7 textured scene triangles with
+  stencil 1, func ALWAYS, ref 0, masks FF/FF, ops KEEP/KEEP/ZERO. The
+  stencil test always passes and writes zero; the black comes from the
+  textured scene draw, most likely the P8 texture content/decode or baked
+  shadow, not the stencil buffer.
+- The HUD is also ALWAYS/KEEP, so its loss with stencil enabled is a
+  queue/readback/double-buffer ordering problem (the stencil-only passes add
+  flushes), not a failing stencil test.
+- The stencil path remains off by default. The CPU/GPU stencil measurement
+  stays at ~12-18 fps because the stencil-only shadow passes are numerous.
+
+### 3D diagnostics added (2026-10-19)
+
+- RECOMP_FRAME_TRACE now prints the plan kind and full stencil state.
+- RECOMP_DUMP_TEX_OFFSET=<hex> / ll dumps decoded P8 textures from the
+  CPU cache. The plan-7 3D textures inspected (architecture, sky, floor atlases)
+  are normal; the black rectangles are not a P8 texture-content problem.
+- RECOMP_NO_CULL=1 disables face culling for comparison. The black
+  rectangles remain, so the culling path is not their cause.
+- RECOMP_NO_SHADOW=1 skips stencil-enabled solid-black plan-3 shadow draws.
+  This is available as a visual/performance option but did not remove the
+  measured black rectangles.
+- Stencil remains opt-in and off by default; CPU/GPU stencil measurements are
+  ~12-18 fps and the HUD loss is a queue/readback ordering issue.
+
+### D3D12 backend (2026-10-19)
+
+- Added xbox/src/nv2a_gpu_d3d12.c, an opt-in D3D12 queue rasteriser behind
+  the same Nv2aGpuBackend seam. It uses a D3D12 root signature, static
+  vertex/pixel shaders, descriptor heaps for four texture stages and four
+  samplers, PSO caching for blend/depth/colour-mask state, batched consecutive
+  equal-state triangles, persistent texture uploads, and a per-queue command
+  list with a readback buffer.
+- RECOMP_GPU_D3D12=1 selects it; the software rasteriser remains the default.
+- Build: add d3d12 to the game link libraries and NOBLE_HAVE_D3D12 to the
+  target definitions. The D3D11 backend is unchanged.
+- Measured: menu **57-61 fps**, 3D scene **20-28 fps**. The 3D path still has
+  the same HUD/black-polygon issues as the NV2A GPU seam, and the CPU executor
+  + per-queue readback remain. This matches the BLACK-XBERecomp finding that
+  60 fps needs the D3D8 API HLE (no NV2A vertex/queue interpreter), not just a
+  GPU rasteriser behind the NV2A stream.
+
 ## Alpha 0.2.1 — 2026-10-15
 
 This maintenance release refines the Stage A EE scheduler architecture, resolves virtual time pacing deadlocks, and eliminates scheduler polling overhead across all gameplay regions.

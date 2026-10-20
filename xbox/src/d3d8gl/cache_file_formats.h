@@ -1,0 +1,4 @@
+#ifndef NOBLE_CACHE_FILE_FORMATS_H
+#define NOBLE_CACHE_FILE_FORMATS_H
+#endif
+

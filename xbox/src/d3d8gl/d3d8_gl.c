@@ -7017,9 +7017,16 @@ int noble_d3d8_readback_host(D3DSurface *surface)
     if (!device.gl_ready || !surface || !surface->Data) return 0;
     xgpu_texture_describe(surface->Format, surface->Size, &description);
     if (!description.linear || (description.format != D3DFMT_LIN_A8R8G8B8 && description.format != D3DFMT_LIN_X8R8G8B8)) return 0;
-    /* Never create a blank GL target just to read it over guest pixels. */
-    if (!xgpu_render_target_find(surface->Data)) return 0;
-    entry = render_target_get(surface);
+    /* The guest surface passed at Swap is the front buffer.  The GL draw
+     * target is device.render_target, which may have a different guest Data
+     * address (and therefore a different render_target_entry).  Read the
+     * drawn target and copy it into the front surface instead of reading the
+     * front entry, which has only ever been cleared. */
+    if (device.render_target && device.render_target->Data
+        && xgpu_render_target_find(device.render_target->Data))
+        entry = render_target_get(device.render_target);
+    else
+        entry = render_target_get(surface);
     if (!entry || !entry->target.written || entry->target.gl_width != description.width || entry->target.gl_height != description.height)
         return 0;
     render_target_resolve(&entry->target);

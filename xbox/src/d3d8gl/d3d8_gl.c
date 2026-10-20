@@ -7038,6 +7038,49 @@ int noble_d3d8_readback_host(D3DSurface *surface)
     glReadPixels(0, 0, description.width, description.height, GL_BGRA, GL_UNSIGNED_BYTE,
                     PLATFORM_PHYSICAL_TO_VIRTUAL(surface->Data));
     error = glGetError();
+
+    if (getenv("RECOMP_D3D8GL_DUMP_READBACK")) {
+        static unsigned dump_no;
+        const unsigned char *px = (const unsigned char *)
+            PLATFORM_PHYSICAL_TO_VIRTUAL(surface->Data);
+        char path[128];
+        FILE *f;
+        sprintf(path, "output/d3d8gl_readback_%u.bmp", dump_no++);
+        f = fopen(path, "wb");
+        if (f && px) {
+            unsigned row = (description.width * 3u + 3u) & ~3u;
+            unsigned img = row * description.height, total = 54u + img;
+            unsigned char hdr[54] = {0}, *line = calloc(row, 1);
+            hdr[0] = 'B'; hdr[1] = 'M';
+            memcpy(hdr + 2, &total, 4);
+            hdr[10] = 54; hdr[14] = 40;
+            memcpy(hdr + 18, &description.width, 4);
+            memcpy(hdr + 22, &description.height, 4);
+            hdr[26] = 1; hdr[28] = 24;
+            memcpy(hdr + 34, &img, 4);
+            fwrite(hdr, 1, 54, f);
+            if (line) {
+                unsigned y, x;
+                for (y = description.height; y-- > 0; ) {
+                    const unsigned char *src = px + y * (description.pitch ? description.pitch : description.width * 4);
+                    memset(line, 0, row);
+                    for (x = 0; x < description.width; x++) {
+                        line[x*3+0] = src[x*4+0];
+                        line[x*3+1] = src[x*4+1];
+                        line[x*3+2] = src[x*4+2];
+                    }
+                    fwrite(line, 1, row, f);
+                }
+                free(line);
+            }
+            fclose(f);
+        }
+        fprintf(stderr, "[D3D8GL] readback surf=%08X data=%08X fmt=%08X %ux%u target=%08X first=%08X err=%d bmp=%s\n",
+                (unsigned)(uintptr_t)surface, surface->Data, surface->Format,
+                description.width, description.height,
+                (unsigned)entry->target.texture,
+                px ? *(const unsigned *)px : 0, (int)error, path);
+    }
     glBindFramebuffer(GL_READ_FRAMEBUFFER, framebuffer);
     glBindBuffer(GL_PIXEL_PACK_BUFFER, pack_buffer);
     glPixelStorei(GL_PACK_ALIGNMENT, alignment);

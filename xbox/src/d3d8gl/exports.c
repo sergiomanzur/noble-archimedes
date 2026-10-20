@@ -158,6 +158,9 @@ int noble_d3d8_readback_host(D3DSurface *surface);
 __declspec(dllexport) void noble_d3d8_draw_up(unsigned primitive, unsigned count,
                                              unsigned data, unsigned stride)
 {
+    if (getenv("RECOMP_D3D8GL_TRACE"))
+        fprintf(stderr,"[D3D8GL] export draw_up prim=%u count=%u data=%08X stride=%u\n",
+                primitive, count, data, stride);
     noble_d3d8_sync_state();
     noble_d3d8_draw_up_host(primitive, count, noble_guest_pointer(data), stride);
 }

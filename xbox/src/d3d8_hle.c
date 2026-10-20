@@ -133,6 +133,11 @@ static int load_dll(void)
     LOAD(select_vertex_shader, pair_fn);
 #undef LOAD
     g_ready = 1;
+    if (getenv("RECOMP_D3D8GL_TRACE")) {
+        char path[MAX_PATH];
+        GetModuleFileNameA(g_module, path, sizeof path);
+        fprintf(stderr, "[D3D8HLE] module=%s draw_up=%p\n", path, (void *)p_draw_up);
+    }
     return 1;
 }
 
@@ -283,9 +288,28 @@ int noble_d3d8_guest_call(uint32_t va, uint32_t cleanup)
         p_clear(arg(0),arg(1),arg(2),arg(3),z,arg(5));
         break;
     }
-    case 0x003BA740u: p_draw_up(arg(0),arg(1),arg(2),arg(3)); break;
-    case 0x003BA8B0u: p_draw_indexed_up(arg(0),arg(1),arg(2),arg(3),arg(4)); break;
-    case 0x003BA9F0u: p_draw_indexed(arg(0),arg(1),arg(2)); break;
+    case 0x003BA740u:
+        if (getenv("RECOMP_D3D8GL_TRACE"))
+            fprintf(stderr,"[D3D8HLE] DRAW_UP prim=%u count=%u data=%08X stride=%u\n",
+                    arg(0),arg(1),arg(2),arg(3));
+        if (getenv("RECOMP_D3D8GL_TRACE"))
+            fprintf(stderr,"[D3D8HLE] DRAW_UP host=%p before\n",(void*)p_draw_up);
+        p_draw_up(arg(0),arg(1),arg(2),arg(3));
+        if (getenv("RECOMP_D3D8GL_TRACE"))
+            fprintf(stderr,"[D3D8HLE] DRAW_UP after\n");
+        break;
+    case 0x003BA8B0u:
+        if (getenv("RECOMP_D3D8GL_TRACE"))
+            fprintf(stderr,"[D3D8HLE] DRAW_IDX_UP prim=%u count=%u idx=%08X data=%08X stride=%u\n",
+                    arg(0),arg(1),arg(2),arg(3),arg(4));
+        p_draw_indexed_up(arg(0),arg(1),arg(2),arg(3),arg(4));
+        break;
+    case 0x003BA9F0u:
+        if (getenv("RECOMP_D3D8GL_TRACE"))
+            fprintf(stderr,"[D3D8HLE] DRAW_IDX prim=%u count=%u idx=%08X\n",
+                    arg(0),arg(1),arg(2));
+        p_draw_indexed(arg(0),arg(1),arg(2));
+        break;
     case 0x003BAD40u: p_begin(arg(0)); return 0; /* Guest Begin/End maintain device flags. */
     case 0x003BAD80u: p_end(); return 0;
     case 0x003BAC50u: p_vertex2f(arg(0),arg(1),arg(2)); break;

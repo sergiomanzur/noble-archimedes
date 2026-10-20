@@ -252,7 +252,8 @@ def find_window(pid: int):
 
 
 def run_one(exe: Path, out: Path, pad_text: str, duration: int,
-            backend: str, update_baseline: bool) -> list[Path]:
+            backend: str, update_baseline: bool, no_unique: bool = False,
+            no_gpu_stats: bool = False, no_p8_cache: bool = False) -> list[Path]:
     out.mkdir(parents=True, exist_ok=True)
     (out / "pad_script.txt").write_text(pad_text, encoding="ascii")
     for f in ("xbox_stdout.log", "xbox_stderr.log", "xbox_kernel.log"):
@@ -268,11 +269,14 @@ def run_one(exe: Path, out: Path, pad_text: str, duration: int,
         RECOMP_FB_DUMP=str(out / "frame.bmp"),
         RECOMP_FB_WINDOW_DUMP_EVERY="30",
         RECOMP_PACE_STATS="1",
-        RECOMP_GPU_STATS="1",
         RECOMP_BENCH_STATS="1",
-        RECOMP_BENCH_UNIQUE="1",
-        RECOMP_BENCH_PRESENT="1",
     )
+    if not no_unique:
+        env["RECOMP_BENCH_UNIQUE"] = "1"
+    if not no_gpu_stats:
+        env["RECOMP_GPU_STATS"] = "1"
+    if no_p8_cache:
+        env["RECOMP_NO_P8_CACHE"] = "1"
     if backend == "d3d11":
         env["RECOMP_GPU_RASTER"] = "1"
     elif backend == "d3d12":
@@ -374,6 +378,12 @@ def main() -> int:
                     default="software")
     ap.add_argument("--exe", type=Path, default=EXE_DEFAULT)
     ap.add_argument("--update-baseline", action="store_true")
+    ap.add_argument("--no-unique", action="store_true",
+                    help="disable framebuffer hashing to measure harness overhead")
+    ap.add_argument("--no-gpu-stats", action="store_true",
+                    help="disable per-second GPU/P8 reports")
+    ap.add_argument("--no-p8-cache", action="store_true",
+                    help="disable the P8 RGBA cache for comparison")
     a = ap.parse_args()
     if not a.exe.exists():
         print(f"missing executable: {a.exe}", file=sys.stderr)
@@ -393,7 +403,8 @@ def main() -> int:
         for run in range(1, a.runs + 1):
             rdir = pdir / f"run{run}"
             print(f"\n[{profile} run {run}/{a.runs}] {rdir}")
-            shots = run_one(a.exe, rdir, pad, duration, a.backend, a.update_baseline)
+            shots = run_one(a.exe, rdir, pad, duration, a.backend, a.update_baseline,
+                            a.no_unique, a.no_gpu_stats, a.no_p8_cache)
             notes = compare_baseline(shots, a.update_baseline)
             log = rdir / "xbox_stderr.log"
             samples = parse_log(log) if log.exists() else []

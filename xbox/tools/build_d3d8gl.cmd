@@ -13,7 +13,7 @@ clang-cl /nologo /c /std:c11 /Ioutput\OpenCE\port\windows\include /Ioutput\OpenC
 if errorlevel 1 exit /b 1
 set OBJECTS=xbox\src\d3d8gl\d3d8_gl.obj xbox\src\d3d8gl\d3d8_resources.obj xbox\src\d3d8gl\nv2a_vsh.obj xbox\src\d3d8gl\nv2a_psh.obj xbox\src\d3d8gl\xbox_textures.obj xbox\src\d3d8gl\xgpu_text.obj xbox\src\d3d8gl\gl_functions.obj xbox\src\d3d8gl\stubs.obj xbox\src\d3d8gl\hires_stubs.obj xbox\src\d3d8gl\exports.obj xbox\src\d3d8gl\win32_posix.obj
 set LIBS=output\sdl3\SDL3-3.4.18\lib\x64\SDL3.lib opengl32.lib user32.lib gdi32.lib winmm.lib
-link /nologo /DEBUG /MAP:output\d3d8gl.map /PDB:output\d3d8gl.pdb /DLL /OUT:output\d3d8gl.dll %OBJECTS% %LIBS%
+link /nologo /DEBUG /INCREMENTAL:NO /MAP:output\d3d8gl.map /PDB:output\d3d8gl.pdb /DLL /OUT:output\d3d8gl.dll %OBJECTS% %LIBS%
 if errorlevel 1 exit /b 1
 if /i "%~1"=="test" (
   clang-cl %COMMON% /Foxbox\src\d3d8gl\d3d8gl_abi_test.obj xbox\tests\d3d8gl_abi_test.c

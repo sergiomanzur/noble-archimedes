@@ -135,8 +135,13 @@ static int load_dll(void)
     g_ready = 1;
     if (getenv("RECOMP_D3D8GL_TRACE")) {
         char path[MAX_PATH];
+        HMODULE by_addr = NULL;
+        FARPROC exp = GetProcAddress(g_module, "noble_d3d8_draw_up");
         GetModuleFileNameA(g_module, path, sizeof path);
-        fprintf(stderr, "[D3D8HLE] module=%s draw_up=%p\n", path, (void *)p_draw_up);
+        GetModuleHandleExA(0x00000004 /* FROM_ADDRESS */, (LPCSTR)p_draw_up, &by_addr);
+        fprintf(stderr, "[D3D8HLE] module=%s draw_up=%p export=%p addr_base=%p offset=%llX\n",
+                path, (void *)p_draw_up, (void *)exp, (void *)by_addr,
+                (unsigned long long)((uintptr_t)p_draw_up - (uintptr_t)by_addr));
     }
     return 1;
 }

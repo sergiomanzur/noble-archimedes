@@ -5617,12 +5617,22 @@ static void fvf_draw(D3DPRIMITIVETYPE type, UINT start, UINT count, const WORD *
 
 void WINAPI D3DDevice_DrawVertices(D3DPRIMITIVETYPE primitive_type, UINT start_vertex, UINT vertex_count)
 {
+    if (getenv("RECOMP_D3D8GL_TRACE"))
+        fprintf(stderr, "[D3D8GL] draw prim=%u start=%u count=%u fixed=%d fvf=%08X shader=%p up=%p stride=%u\n",
+                (unsigned)primitive_type, start_vertex, vertex_count,
+                (int)device.fixed_function, (unsigned)device.fvf,
+                (void *)device.vertex_shader, device.up_vertices,
+                device.streams[0].stride);
     if (device.fixed_function && device.fvf) {
         fvf_draw(primitive_type, start_vertex, vertex_count, NULL);
         return;
     }
-	if (!vertex_count || !prepare_draw(FALSE))
-		return;
+    if (!vertex_count) return;
+    if (!prepare_draw(FALSE)) {
+        if (getenv("RECOMP_D3D8GL_TRACE"))
+            fprintf(stderr, "[D3D8GL] draw rejected by prepare_draw\n");
+        return;
+    }
 	trace_draw("draw", primitive_type, vertex_count, NULL);
 	setup_streams(start_vertex, vertex_count);
 	if (primitive_type == D3DPT_QUADLIST)
@@ -5828,6 +5838,11 @@ void WINAPI D3DDevice_DrawIndexedVertices(D3DPRIMITIVETYPE primitive_type, UINT 
 	GLuint index_buffer = 0;
 	BOOL mirrored;
 
+    if (getenv("RECOMP_D3D8GL_TRACE"))
+        fprintf(stderr, "[D3D8GL] idraw prim=%u count=%u fixed=%d fvf=%08X shader=%p base=%u\n",
+                (unsigned)primitive_type, vertex_count,
+                (int)device.fixed_function, (unsigned)device.fvf,
+                (void *)device.vertex_shader, device.base_vertex_index);
     if (!index_data) return;
     if (device.fixed_function && device.fvf) {
         fvf_draw(primitive_type, device.base_vertex_index, vertex_count, index_data);

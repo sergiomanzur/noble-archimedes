@@ -261,7 +261,8 @@ def find_window(pid: int):
 def run_one(exe: Path, out: Path, pad_text: str, duration: int,
             backend: str, update_baseline: bool, no_unique: bool = False,
             no_gpu_stats: bool = False, no_p8_cache: bool = False,
-            capture_flips: str = "", pad_frames: bool = False) -> list[Path]:
+            capture_flips: str = "", pad_frames: bool = False,
+            gpu_present: bool = False) -> list[Path]:
     out.mkdir(parents=True, exist_ok=True)
     (out / "pad_script.txt").write_text(pad_text, encoding="ascii")
     for f in ("xbox_stdout.log", "xbox_stderr.log", "xbox_kernel.log"):
@@ -292,6 +293,8 @@ def run_one(exe: Path, out: Path, pad_text: str, duration: int,
         env["RECOMP_PAD_FRAMES"] = "1"
     if backend == "d3d11":
         env["RECOMP_GPU_RASTER"] = "1"
+    if gpu_present:
+        env["RECOMP_GPU_PRESENT"] = "1"
     elif backend == "d3d12":
         env["RECOMP_GPU_D3D12"] = "1"
     st = subprocess.STARTUPINFO()
@@ -399,6 +402,8 @@ def main() -> int:
                     help="disable the P8 RGBA cache for comparison")
     ap.add_argument("--capture-flips", default="",
                     help="comma-separated presented flip numbers to capture")
+    ap.add_argument("--gpu-present", action="store_true",
+                    help="enable RECOMP_GPU_PRESENT for the D3D11 backend")
     a = ap.parse_args()
     if not a.exe.exists():
         print(f"missing executable: {a.exe}", file=sys.stderr)

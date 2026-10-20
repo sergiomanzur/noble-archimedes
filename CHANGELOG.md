@@ -1,5 +1,24 @@
 # Changelog
 
+## D3D8 HLE parallel-pass review and full-run stall (2026-10-20)
+
+- Committed the parallel agent's D3D8GL work as `7be74ac`: fixed-function TSS
+  compiler, embedded vertex constants, pixel-shader definitions, copy-rect
+  support, draw-target readback and tests.
+- The latest D3D8GL captures are visually plausible (courtyard, Hector, HUD),
+  unlike the earlier black target. The latest partial run measured title 60,
+  menu 54, cutscene 42, courtyard 34-35 and pause 35 fps.
+- `HLE-PERF` in the courtyard showed readback 2-10 ms/frame, submit 1-6 ms,
+  present ~0.1 ms. The remaining time is not in the HLE wrapper accounting.
+- A full frame-exact D3D8GL calibration **does not complete**: the run stops at
+  about 44.9 s. The last `[TICK]` is guest_ms 143945250, vblank 2955,
+  flips 2346; no later PACE/BENCH lines or HLE swaps arrive. A process sample
+  after 50 s shows the main thread in `ntdll` waits and
+  `xbox_KeStallExecutionProcessor`; the GL wrapper is not the active hot path.
+- This looks like a guest spin/vblank/present wait at the first 3D transition,
+  not a GL readback cost. The software path remains the default; the HLE path
+  is not yet a validated 60 fps backend.
+
 ## D3D8GL draw-target follow-up (2026-10-20)
 
 - Switched Swap readback from the front surface's render-target entry to

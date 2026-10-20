@@ -13,6 +13,13 @@ int xbox_RecompBlockOnGpuFence(void)
 
     if (!nv2a_pb_dma_walk())
         return 0;
+    /* Device-level D3D8 HLE owns the GL draw and never submits an NV2A
+     * semaphore release.  The guest fence therefore has no producer and must
+     * be considered complete; waiting here is the first-3D-transition stall. */
+    if (getenv("RECOMP_D3D8GL")) {
+        g_esp += 12;                 /* guest RET 8 */
+        return 1;
+    }
     device = MEM32(0x3C6F98);
     if (!device || !(semaphore = MEM32(device + 0x30)))
         return 0;

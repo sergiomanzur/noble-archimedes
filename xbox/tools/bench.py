@@ -48,7 +48,7 @@ MAIN_SCENES = [
     ("courtyard_light", 54000, 60000),
     ("pause",          62000, 70000),
     ("courtyard_heavy", 74000, 86000),
-    ("combat",         88000, 106000),
+    ("combat",         88000, 104000),
 ]
 
 MAIN_PAD = """\

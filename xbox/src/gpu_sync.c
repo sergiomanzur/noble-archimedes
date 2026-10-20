@@ -1,5 +1,6 @@
 /* D3D's GPU fence wait, bridged to the executor's actual semaphore writes. */
 #include <windows.h>
+#include <stdlib.h>
 #include <recomp/gen/recomp_types.h>
 
 extern int nv2a_pb_dma_walk(void);

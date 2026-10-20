@@ -165,7 +165,7 @@ class BenchHarnessTest(unittest.TestCase):
             self.assertEqual(generated[0][1:3], (20, "software"))
             self.assertEqual(generated[1][1:3], (20, "d3d8gl"))
             self.assertEqual(generated[1][3]["capture_flips"],
-                             "990,1275,1695,3420,3960,4800,5820")
+                             "990,1275,1695,3420,3960,4800,5760")
             self.assertTrue(generated[1][3]["pad_frames"])
 
     def test_frame_cli_rejects_unusable_calibration_without_launch(self):

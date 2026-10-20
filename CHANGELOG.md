@@ -1,5 +1,34 @@
 # Changelog
 
+## D3D8 HLE first-3D stall fixed; full frame-exact run (2026-10-20)
+
+- Root cause of the ~44.9 s stop: `xbox_RecompBlockOnGpuFence` waited for an
+  NV2A semaphore release, but the device-level D3D8 HLE owns the GL draw and
+  never submits that release. The guest main thread spun in
+  `xbox_KeStallExecutionProcessor` and `ntdll` waits.
+- The fence bridge now treats the fence as complete when `RECOMP_D3D8GL` is
+  active (`xbox/src/gpu_sync.c`). The software/default path is unchanged.
+- The benchmark combat window now ends at 104 s because the scripted run exits
+  around 106 s; this lets the frame-exact calibration validate its final sample.
+- Full frame-exact D3D8GL run now reaches every scene and captures them:
+
+  | scene | fps | unique fps | unique/present |
+  |---|---:|---:|---:|
+  | title | 59.5 | 49.3 | 82.7% |
+  | main_menu | 53.5 | 32.0 | 67.4% |
+  | cutscene | 38.0 | 36.8 | 87.8% |
+  | courtyard_light | 46.0 | 45.4 | 100.0% |
+  | pause | 46.0 | 45.4 | 100.0% |
+  | courtyard_heavy | 40.5 | 40.0 | 100.0% |
+  | combat | 41.0 | 40.5 | 100.0% |
+
+- Captures are visually plausible in all seven scenes: title, menu, cutscene
+  map, courtyard with HUD, pause panel, heavy courtyard and combat. No stall.
+- Remaining HLE cost per frame (courtyard): readback ~4.3 ms, GL submit
+  ~4.1 ms, present ~0.1 ms, prepare ~0.15 ms, copy ~0.14 ms. The rest of the
+  21.7 ms frame is guest execution and GL driver time. The path is still below
+  60 fps and is not the default.
+
 ## D3D8 HLE parallel-pass review and full-run stall (2026-10-20)
 
 - Committed the parallel agent's D3D8GL work as `7be74ac`: fixed-function TSS

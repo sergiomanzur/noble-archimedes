@@ -15,6 +15,7 @@ static void test_sleep(DWORD ms) { clock_ticks += (LONGLONG)ms * 6000; }
 void nv2a_pb_perf_report(void) {}
 uint32_t xbox_GuestTickCount(void) { return 0; }
 uint32_t xbox_VblankCount(void) { return 0; }
+uint32_t xbox_FramebufferFlipCount(void) { return 0; }
 
 #define QueryPerformanceFrequency test_frequency
 #define QueryPerformanceCounter test_counter

@@ -8,6 +8,7 @@ extern ptrdiff_t g_xbox_mem_offset;
 extern void nv2a_pb_perf_report(void);
 extern uint32_t xbox_GuestTickCount(void);
 extern uint32_t xbox_VblankCount(void);
+extern uint32_t xbox_FramebufferFlipCount(void);
 
 /* Runs only on the GPU consumer thread, once per completed flip. The game's
  * movie-player object at 0x012B57E0 keeps its active flag at +0x48. The state
@@ -125,7 +126,9 @@ void recomp_present_frame(void)
                 DWORD bench_now = GetTickCount();
                 if (!bench_start)
                     bench_start = bench_now;
-                fprintf(stderr, "[BENCH] ms=%lu\n", (unsigned long)(bench_now - bench_start));
+                fprintf(stderr, "[BENCH] ms=%lu flips=%u\n",
+                        (unsigned long)(bench_now - bench_start),
+                        xbox_FramebufferFlipCount());
                 fprintf(stderr, "[TICK] guest_ms=%u vblank=%u flips=%u\n",
                         xbox_GuestTickCount(), xbox_VblankCount(),
                         (unsigned)calls);

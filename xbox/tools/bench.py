@@ -42,7 +42,7 @@ EXE_DEFAULT = ROOT / "xbox" / "build" / "Release" / "curse_of_darkness_xbox_reco
 # around 48-50 s with the standard three Start presses (output/HANDOFF.md).
 MAIN_SCENES = [
     ("title",          15000, 18000),
-    ("main_menu",      18500, 21500),
+    ("main_menu",      19000, 23500),
     ("cutscene",       25000, 31500),
     ("courtyard_light", 54000, 60000),
     ("pause",          62000, 70000),
@@ -84,7 +84,7 @@ PERF_RE = re.compile(
     r"share=(?P<share>[-0-9.]+) wait=(?P<gwait>[-0-9.]+) setup=(?P<setup>[-0-9.]+) "
     r"ms/frame"
 )
-BENCH_RE = re.compile(r"\[BENCH\] ms=(?P<ms>\d+)")
+BENCH_RE = re.compile(r"\[BENCH\] ms=(?P<ms>\d+)(?: flips=(?P<flip>\d+))?")
 TICK_RE = re.compile(r"\[TICK\] guest_ms=(?P<guest>\d+) vblank=(?P<vblank>\d+) flips=(?P<flips>\d+)")
 UNIQ_RE = re.compile(r"\[UNIQUE\] presents=(?P<presents>\d+) unique=(?P<unique>\d+)")
 
@@ -96,6 +96,7 @@ class Sample:
     perf: dict | None
     tick: dict | None
     unique: dict | None
+    flip: int = 0
 
 
 @dataclass
@@ -136,6 +137,7 @@ class SceneResult:
 def parse_log(path: Path) -> list[Sample]:
     samples: list[Sample] = []
     last_ms = 0.0
+    last_flip = 0
     last_perf = None
     last_tick = None
     last_unique = None
@@ -143,12 +145,15 @@ def parse_log(path: Path) -> list[Sample]:
         m = BENCH_RE.search(line)
         if m:
             last_ms = float(m.group("ms"))
+            if m.group("flip") is not None:
+                last_flip = int(m.group("flip"))
             continue
         m = PACE_RE.search(line)
         if m:
             d = {k: (float(v) if k in ("period", "min", "max", "wait") else int(v))
                  for k, v in m.groupdict().items()}
-            samples.append(Sample(last_ms, d, last_perf, last_tick, last_unique))
+            samples.append(Sample(last_ms, d, last_perf, last_tick, last_unique,
+                                  last_flip))
             continue
         m = PERF_RE.search(line)
         if m:
@@ -200,10 +205,12 @@ def summarize(name: str, a: float, b: float, samples: list[Sample]) -> SceneResu
         r.present_unique_ratio = (du / dp) if dp else 0.0
         # A per-second unique rate is useful next to the PACE flips.
         r.unique_fps.append(du / dt)
-    if r.guest_ms:
-        # KeTickCount is the guest-visible ms clock.  It is not the game's
-        # logic counter, so report it as a clock rate, not as fps.
-        r.guest_rate = (r.guest_ms[-1] - r.guest_ms[0]) / max(0.001, r.seconds)
+    if len(r.guest_ms) >= 2 and rows:
+        # Divide by the span between the samples that actually carried the
+        # tick values, not by a nominal scene length.  Using the latter made a
+        # healthy 1000 ms/s guest clock look like 667 ms/s.
+        tick_span = max(0.001, (rows[-1].ms - rows[0].ms) / 1000.0)
+        r.guest_rate = (r.guest_ms[-1] - r.guest_ms[0]) / tick_span
     return r
 
 
@@ -254,7 +261,7 @@ def find_window(pid: int):
 def run_one(exe: Path, out: Path, pad_text: str, duration: int,
             backend: str, update_baseline: bool, no_unique: bool = False,
             no_gpu_stats: bool = False, no_p8_cache: bool = False,
-            capture_flips: str = "") -> list[Path]:
+            capture_flips: str = "", pad_frames: bool = False) -> list[Path]:
     out.mkdir(parents=True, exist_ok=True)
     (out / "pad_script.txt").write_text(pad_text, encoding="ascii")
     for f in ("xbox_stdout.log", "xbox_stderr.log", "xbox_kernel.log"):
@@ -281,6 +288,8 @@ def run_one(exe: Path, out: Path, pad_text: str, duration: int,
     if capture_flips:
         env["RECOMP_CAPTURE_FLIPS"] = capture_flips
         env["RECOMP_CAPTURE_DIR"] = str(out)
+    if pad_frames:
+        env["RECOMP_PAD_FRAMES"] = "1"
     if backend == "d3d11":
         env["RECOMP_GPU_RASTER"] = "1"
     elif backend == "d3d12":

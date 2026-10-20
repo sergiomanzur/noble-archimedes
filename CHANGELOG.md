@@ -1,5 +1,19 @@
 # Changelog
 
+## D3D8 HLE remaining-cost profile (2026-10-20)
+
+- Added per-call HLE timers for setters, streams, textures and palette uploads.
+  In the courtyard these are effectively free (<0.02 ms/frame).
+- Current D3D8GL frame at 44-46 fps: readback ~4.0 ms, GL submit ~2.9 ms,
+  present ~0.1 ms, prepare/copy/palette ~0.25 ms. Guest execution and the
+  GL/driver path account for the remaining ~15 ms.
+- A diagnostic run with draws suppressed (`RECOMP_D3D8GL_NO_DRAW=1`, not a
+  shipping mode) reaches the 60 Hz guest ceiling without the draw path, which
+  confirms the remaining limit is the rendered path, not guest logic.
+- Suppressing the readback alone did not improve the frame rate; the wait moves
+  to the draw/present path. A real fix needs overlap or a cheaper presentation
+  path, not just removing the copy.
+
 ## D3D8 HLE first-3D stall fixed; full frame-exact run (2026-10-20)
 
 - Root cause of the ~44.9 s stop: `xbox_RecompBlockOnGpuFence` waited for an

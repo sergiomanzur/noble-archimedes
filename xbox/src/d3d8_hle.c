@@ -85,7 +85,7 @@ static int hle_trace_enabled(void)
     if(enabled<0) enabled=getenv("RECOMP_D3D8GL_TRACE")!=NULL;
     return enabled;
 }
-static double g_hle_cost[5];
+static double g_hle_cost[10];
 static double hle_time(void)
 {
     static int enabled=-1;
@@ -343,9 +343,10 @@ int noble_d3d8_guest_call(uint32_t va, uint32_t cleanup)
             p_present();
             g_hle_cost[1]+=hle_time()-present_start;
             if(++measured_frames==120 && present_start) {
-                fprintf(stderr,"[HLE-PERF] readback=%.2f present=%.2f submit=%.2f prepare=%.2f copy=%.2f ms/frame\n",
-                    g_hle_cost[0]/120,g_hle_cost[1]/120,g_hle_cost[2]/120,g_hle_cost[3]/120,g_hle_cost[4]/120);
-                for(i=0;i<5;i++) g_hle_cost[i]=0;
+                fprintf(stderr,"[HLE-PERF] readback=%.2f present=%.2f submit=%.2f prepare=%.2f copy=%.2f set=%.2f stream=%.2f texture=%.2f palette=%.2f ms/frame\n",
+                    g_hle_cost[0]/120,g_hle_cost[1]/120,g_hle_cost[2]/120,g_hle_cost[3]/120,g_hle_cost[4]/120,
+                    g_hle_cost[5]/120,g_hle_cost[9]/120,g_hle_cost[7]/120,g_hle_cost[8]/120);
+                for(i=0;i<10;i++) g_hle_cost[i]=0;
                 measured_frames=0;
             }
         }
@@ -361,12 +362,12 @@ int noble_d3d8_guest_call(uint32_t va, uint32_t cleanup)
         if(!copied) return 0;
         break;
     }
-    case 0x003B75F0u: p_viewport(arg(0)); return 0;
-    case 0x003B6B80u: p_transform(arg(0),arg(1)); return 0;
-    case 0x003B7820u: p_texture(arg(0),arg(1)); return 0;
-    case 0x003B79D0u: p_palette(arg(0),arg(1)); return 0;
-    case 0x003B8A50u: p_stream(arg(0),arg(1),arg(2)); return 0;
-    case 0x003B7A60u: p_indices(arg(0),arg(1)); return 0;
+    case 0x003B75F0u: { double t=hle_time(); p_viewport(arg(0)); g_hle_cost[5]+=hle_time()-t; return 0; }
+    case 0x003B6B80u: { double t=hle_time(); p_transform(arg(0),arg(1)); g_hle_cost[6]+=hle_time()-t; return 0; }
+    case 0x003B7820u: { double t=hle_time(); p_texture(arg(0),arg(1)); g_hle_cost[7]+=hle_time()-t; return 0; }
+    case 0x003B79D0u: { double t=hle_time(); p_palette(arg(0),arg(1)); g_hle_cost[8]+=hle_time()-t; return 0; }
+    case 0x003B8A50u: { double t=hle_time(); p_stream(arg(0),arg(1),arg(2)); g_hle_cost[9]+=hle_time()-t; return 0; }
+    case 0x003B7A60u: { double t=hle_time(); p_indices(arg(0),arg(1)); g_hle_cost[5]+=hle_time()-t; return 0; }
     case 0x003B8820u:
         p_vertex_constants((int)g_ecx-96,g_edx,1); return 0;
     case 0x003B8880u:

@@ -1,5 +1,26 @@
 # Changelog
 
+## Xbox 60 FPS Step 2 complete - frame-exact validation (2026-10-19)
+
+- Added `xbox/tools/frame_bench.py`: a calibration run maps wall-clock pad
+  timestamps to presented flips, then the measured runs use frame-scheduled
+  pad input and frame-triggered captures. Scene windows are filtered by flip.
+- The calibration and actual capture show the real pause panel (Player / Item /
+  Equip / Skill / Options), the HUD, the title menu and the courtyard. The
+  earlier flat gray pause capture was a wall-clock phase error, not a persistent
+  presentation bug.
+- Frame-exact results: title **59.5**, cutscene **56.5**, courtyard-light
+  **31.5**, pause **52**, courtyard-heavy **33** and post-movement courtyard
+  **28** fps. `main_menu` at 19-23 s is the Loading screen after the Start
+  press, not the menu; the title screen is the menu.
+- The guest clock undercount (667-952 ms/s) was a **harness measurement bug**:
+  it divided by nominal scene seconds instead of the tick-sample span. The
+  frame-exact run measures **~1000 ms/s**; the kernel clock is healthy. The
+  high-priority tick experiments were reverted.
+- P8 is 0.7-1.0 ms/frame after the UI-cache bypass; the remaining 3D cost is
+  xform (~8 ms) + raster (~12 ms). M1 has not started.
+- Tests: 19/19.
+
 ## Xbox 60 FPS Step 2 - frame-indexed capture (2026-10-19)
 
 - Added `xbox_FramebufferCapturePresented` which writes the actual published

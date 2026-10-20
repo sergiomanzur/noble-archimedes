@@ -6,8 +6,15 @@
 #include <stddef.h>
 #include <string.h>
 #include <windows.h>
+#include <stdlib.h>
+static unsigned environment_reads;
+static char *count_environment_read(const char *name) {
+    (void)name;environment_reads++;return NULL;
+}
+#define getenv count_environment_read
 
 #include "../src/recomp_manual.c"
+#undef getenv
 
 RECOMP_TLS uint32_t g_eax, g_esp, g_ecx, g_edx, g_ebx, g_esi, g_edi;
 ptrdiff_t g_xbox_mem_offset;
@@ -102,6 +109,9 @@ int main(void)
         failures += test_xid_activation();
     }
     VirtualFree(memory, 0, MEM_RELEASE);
+    environment_reads=0;
+    for(int i=0;i<1000;i++) recomp_unimpl("cli",0);
+    failures+=check(environment_reads==1,"no repeated environment locking for nontrapping instructions");
     if (failures) return 1;
     puts("manual input ABI: translated stack and XID activation passed");
     return 0;

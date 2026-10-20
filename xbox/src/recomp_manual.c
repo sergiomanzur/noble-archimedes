@@ -710,8 +710,11 @@ void recomp_icall_not_code_log(uint32_t va)
 void recomp_unimpl(const char *text, uint32_t va)
 {
     static int printed;
-    const char *trap = getenv("RECOMP_UNIMPL_TRAP");
-    int stop = trap && *trap && *trap != '0';
+    static int stop=-1;
+    if(stop<0) {
+        const char *trap = getenv("RECOMP_UNIMPL_TRAP");
+        stop = trap && *trap && *trap != '0';
+    }
 
     if (printed < 50 || stop) {
         printed++;

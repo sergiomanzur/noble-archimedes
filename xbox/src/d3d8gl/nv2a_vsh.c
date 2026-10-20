@@ -489,10 +489,15 @@ char *nv2a_vertex_shader_to_glsl(const DWORD *instructions, unsigned long instru
 		case _ilu_lit: xgpu_text_append(&text, "\tilu = nv2a_lit(C);\n"); break;
 		default: xgpu_text_append(&text, "\tilu = vec4(0.0);\n"); break;
 		}
-		/* the screen-space conversion takes the reciprocal of the clip-space
-		position's w (rcc of r12.w); keep the position it converts */
+		/* Keep the pre-divide position only for the reserved viewport scale.
+		 * A program can use another constant pair to produce screen space;
+		 * in that case invert its actual final output below. */
 		if (ilu == _ilu_rcc && field(instruction, 3, 28, 2) == _mux_temporary &&
-			((field(instruction, 2, 0, 2) << 2) | field(instruction, 3, 30, 2)) == 12)
+			((field(instruction, 2, 0, 2) << 2) | field(instruction, 3, 30, 2)) == 12 &&
+            mac == _mac_mul && !relative && field(instruction, 1, 13, 8) == XGPU_VERTEX_CONSTANT_BIAS - 38 &&
+            field(instruction, 2, 11, 2) == _mux_constant &&
+            field(instruction, 2, 26, 2) == _mux_temporary && field(instruction, 2, 28, 4) == 12 &&
+            output_is_register && output_address == 0 && output_mask == 14)
 		{
 			xgpu_text_append(&text, "\tclip_position = oPos;\n\tclip_captured = true;\n");
 		}

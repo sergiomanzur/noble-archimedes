@@ -37,6 +37,17 @@ void WINAPI D3DDevice_BlockUntilVerticalBlank(void);
 void noble_d3d8_set_state_arrays(const DWORD *render_state,
                                  const DWORD (*texture_state)[D3DTSS_MAX]);
 void noble_d3d8_sync_state(void);
+int noble_d3d8_fixed_function_host(const DWORD *, unsigned, unsigned);
+int noble_d3d8_copy_rects_host(const D3DSurface *,const RECT *,unsigned,D3DSurface *,const NobleD3DPoint *);
+__declspec(dllexport) int noble_d3d8_copy_rects(unsigned source,unsigned rects,unsigned count,unsigned destination,unsigned points)
+{
+    return noble_d3d8_copy_rects_host(noble_guest_pointer(source),noble_guest_pointer(rects),count,
+        noble_guest_pointer(destination),noble_guest_pointer(points));
+}
+__declspec(dllexport) int noble_d3d8_fixed_function(unsigned packet, unsigned words, unsigned modes)
+{
+    return noble_d3d8_fixed_function_host(noble_guest_pointer(packet),words,modes);
+}
 
 __declspec(dllexport) int noble_d3d8_init(void)
 {
@@ -158,11 +169,21 @@ int noble_d3d8_readback_host(D3DSurface *surface);
 __declspec(dllexport) void noble_d3d8_draw_up(unsigned primitive, unsigned count,
                                              unsigned data, unsigned stride)
 {
-    if (getenv("RECOMP_D3D8GL_TRACE"))
-        fprintf(stderr,"[D3D8GL] export draw_up prim=%u count=%u data=%08X stride=%u\n",
+    if (noble_d3d8_trace_enabled()) {
+        fprintf(stderr,"[D3D8GL] export draw_up ENTER prim=%u count=%u data=%08X stride=%u\n",
                 primitive, count, data, stride);
+        fflush(stderr);
+    }
     noble_d3d8_sync_state();
+    if (noble_d3d8_trace_enabled()) {
+        fprintf(stderr,"[D3D8GL] export draw_up sync done\n");
+        fflush(stderr);
+    }
     noble_d3d8_draw_up_host(primitive, count, noble_guest_pointer(data), stride);
+    if (noble_d3d8_trace_enabled()) {
+        fprintf(stderr,"[D3D8GL] export draw_up RETURN\n");
+        fflush(stderr);
+    }
 }
 __declspec(dllexport) void noble_d3d8_draw_indexed_up(unsigned primitive, unsigned count,
                                 unsigned indices, unsigned data, unsigned stride)

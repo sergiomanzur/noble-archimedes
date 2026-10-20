@@ -258,15 +258,26 @@ void memory_watch_begin_frame(void) {}
 /* ---------- settings ---------- */
 const char *config_string(const char *name)
 {
+    if (!strcmp(name, "debug.texture_dump_directory")) {
+        const char *value=getenv("RECOMP_D3D8GL_DUMP_TEXTURES");
+        return value?value:"";
+    }
     if (!strcmp(name, "display.anti_aliasing")) return "off";
     if (!strcmp(name, "display.model_detail")) return "stock";
     if (!strcmp(name, "display.hdr_tone_mapping")) return "linear";
     if (!strcmp(name, "debug.gpu_skip_vertex_shaders")) return "";
-    if (!strcmp(name, "debug.gpu_dump_shaders")) return "";
+    if (!strcmp(name, "debug.gpu_dump_shaders")) {
+        const char *value = getenv("RECOMP_D3D8GL_DUMP_SHADERS");
+        return value ? value : "";
+    }
     return "";
 }
 long config_integer(const char *name)
 {
+    if (!strcmp(name, "debug.gpu_trace_frame")) {
+        const char *value = getenv("RECOMP_D3D8GL_TRACE_FRAME");
+        return value ? strtol(value, NULL, 10) : -1;
+    }
     if (!strcmp(name, "display.shadow_resolution")) return 0;
     if (!strcmp(name, "display.screen_width")) return 640;
     if (!strcmp(name, "debug.gpu_flush_draws")) return 0;
@@ -279,10 +290,18 @@ float config_real(const char *name)
 }
 BOOL config_boolean(const char *name)
 {
+    if (!strcmp(name, "debug.gl_debug")) return getenv("RECOMP_D3D8GL_GL_DEBUG") != NULL;
+    if (!strcmp(name, "debug.gpu_trace_constants")) return getenv("RECOMP_D3D8GL_TRACE_FRAME") != NULL;
     (void)name;
     return FALSE;
 }
 unsigned long config_changes(void) { return 0; }
+int noble_d3d8_trace_enabled(void)
+{
+    static int enabled=-1;
+    if(enabled<0) enabled=getenv("RECOMP_D3D8GL_TRACE")!=NULL;
+    return enabled;
+}
 
 /* ---------- Halo screen policy: the title's native 640x480 ---------- */
 

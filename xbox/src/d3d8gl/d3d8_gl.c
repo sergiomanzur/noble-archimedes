@@ -401,6 +401,39 @@ DWORD D3D__TextureState[D3DTSS_MAXSTAGES][D3DTSS_MAX];
 
 static const DWORD *guest_render_state;
 static const DWORD (*guest_texture_state)[D3DTSS_MAX];
+static DWORD fixed_combiner_state[D3DRS_PS_MAX];
+static DWORD fixed_texture_modes;
+static BOOL fixed_combiners_active;
+
+/* Consume only combiner methods emitted by the guest's texture-stage
+ * compiler. Validate into a temporary state before replacing a live program. */
+int noble_d3d8_fixed_function_host(const DWORD *packet, unsigned words, unsigned modes)
+{
+    DWORD state[D3DRS_PS_MAX] = {0};
+    unsigned at=0;
+    BOOL count_seen=FALSE;
+    while (at<words) {
+        DWORD header=packet[at++];
+        unsigned method=header&0x1FFFu, count=(header>>18)&0x7FFu, i;
+        if (!count || count>words-at || (header&0xE0030003u)) return 0;
+        for(i=0;i<count;i++) {
+            unsigned m=method+4*i;
+            DWORD value=packet[at+i];
+            if(m==0x1E60) { state[D3DRS_PSCOMBINERCOUNT]=value; count_seen=TRUE; }
+            else if(m>=0xAC0 && m<0xAE0) state[D3DRS_PSRGBINPUTS0+(m-0xAC0)/4]=value;
+            else if(m>=0x1E40 && m<0x1E60) state[D3DRS_PSRGBOUTPUTS0+(m-0x1E40)/4]=value;
+            else if(m>=0x260 && m<0x280) state[D3DRS_PSALPHAINPUTS0+(m-0x260)/4]=value;
+            else if(m>=0xAA0 && m<0xAC0) state[D3DRS_PSALPHAOUTPUTS0+(m-0xAA0)/4]=value;
+            else if(m!=0x3B8) return 0; /* optional specular enable */
+        }
+        at+=count;
+    }
+    if(!count_seen) return 0;
+    memcpy(fixed_combiner_state,state,sizeof(state));
+    fixed_texture_modes=modes;
+    fixed_combiners_active=TRUE;
+    return 1;
+}
 
 void noble_d3d8_set_state_arrays(const DWORD *render_state,
                                  const DWORD (*texture_state)[D3DTSS_MAX])
@@ -458,6 +491,8 @@ struct vertex_shader_object
 	unsigned long id;
 	DWORD *instructions;
 	unsigned long instruction_count;
+    float embedded_constants[XGPU_VERTEX_CONSTANT_COUNT][4];
+    unsigned char embedded_present[XGPU_VERTEX_CONSTANT_COUNT];
 	struct vertex_element elements[XGPU_VERTEX_ATTRIBUTE_COUNT];
 	unsigned long element_count;
 	unsigned long packed_mask;
@@ -1631,6 +1666,63 @@ static GLuint framebuffer_find(GLuint color, GLuint depth, BOOL renderbuffers)
 static GLuint framebuffer_get(GLuint color, GLuint depth)
 {
 	return framebuffer_find(color, depth, FALSE);
+}
+
+static void render_target_resolve(struct xgpu_render_target *target);
+static unsigned long render_target_write_serial;
+int noble_d3d8_copy_rects_host(const D3DSurface *source,const RECT *rects,
+    unsigned count,D3DSurface *destination,const NobleD3DPoint *points)
+{
+    struct xgpu_render_target *src;
+    struct render_target_entry *dst;
+    struct xgpu_texture_description description;
+    unsigned i;
+    if(!device.gl_ready || !source || !destination) return 0;
+    src=xgpu_render_target_find(source->Data);
+    if(!src || !src->written) return 0;
+    xgpu_texture_describe(destination->Format,destination->Size,&description);
+    if(!description.linear || (description.format!=D3DFMT_LIN_A8R8G8B8 &&
+        description.format!=D3DFMT_LIN_X8R8G8B8)) return 0;
+    if(!count) count=1;
+    /* Reject the entire operation before changing any destination pixels. */
+    for(i=0;i<count;i++) {
+        int x=rects?rects[i].left:0,y=rects?rects[i].top:0;
+        int w=rects?rects[i].right-x:(int)src->width;
+        int h=rects?rects[i].bottom-y:(int)src->height;
+        int dx=points?points[i].x:0,dy=points?points[i].y:0;
+        if(x<0 || y<0 || w<=0 || h<=0 || dx<0 || dy<0 ||
+            x+w>(int)src->width || y+h>(int)src->height ||
+            dx+w>(int)description.width || dy+h>(int)description.height) return 0;
+    }
+    render_target_resolve(src);
+    dst=render_target_get(destination);
+    if(!dst || dst->target.texture==src->texture) return 0;
+    if(!dst->target.written) {
+        glBindTexture(GL_TEXTURE_2D,dst->target.texture);
+        glPixelStorei(GL_UNPACK_ALIGNMENT,4);
+        glPixelStorei(GL_UNPACK_ROW_LENGTH,(GLint)description.pitch/4);
+        glTexSubImage2D(GL_TEXTURE_2D,0,0,0,(GLsizei)description.width,(GLsizei)description.height,
+            GL_BGRA,GL_UNSIGNED_BYTE,PLATFORM_PHYSICAL_TO_VIRTUAL(destination->Data));
+        glPixelStorei(GL_UNPACK_ROW_LENGTH,0);
+    }
+    {
+        GLuint read=framebuffer_get(src->texture,0);
+        GLuint draw=framebuffer_get(dst->target.texture,0);
+        glBindFramebuffer(GL_READ_FRAMEBUFFER,read);
+        glBindFramebuffer(GL_DRAW_FRAMEBUFFER,draw);
+    }
+    glDisable(GL_SCISSOR_TEST);
+    for(i=0;i<count;i++) {
+        int x=rects?rects[i].left:0,y=rects?rects[i].top:0;
+        int w=rects?rects[i].right-x:(int)src->width;
+        int h=rects?rects[i].bottom-y:(int)src->height;
+        int dx=points?points[i].x:0,dy=points?points[i].y:0;
+        glBlitFramebuffer(x,y,x+w,y+h,dx,dy,dx+w,dy+h,GL_COLOR_BUFFER_BIT,GL_NEAREST);
+    }
+    dst->target.written=++render_target_write_serial;
+    dst->last_rendered=device.frame+1;
+    xgpu_gl_state_invalidate();
+    return glGetError()==GL_NO_ERROR;
 }
 
 /* ---------- multisampling
@@ -2911,6 +3003,7 @@ void WINAPI D3DDevice_SetPalette(DWORD stage, D3DPalette *palette)
 
 void WINAPI D3DDevice_SetPixelShaderProgram(D3DPIXELSHADERDEF *definition)
 {
+    fixed_combiners_active=FALSE;
 	/* the definition's members are the pixel shader render states */
 	if (!definition)
 		return;
@@ -2998,7 +3091,15 @@ static void parse_declaration(struct vertex_shader_object *object, const DWORD *
 			}
 			break;
 		case D3DVSD_TOKEN_CONSTMEM:
-			declaration += ((token & D3DVSD_CONSTCOUNTMASK) >> D3DVSD_CONSTCOUNTSHIFT) * 4;
+			{
+                unsigned first=token&0xFFu;
+                unsigned count=(token&D3DVSD_CONSTCOUNTMASK)>>D3DVSD_CONSTCOUNTSHIFT, i;
+                for(i=0;i<count && first+i<XGPU_VERTEX_CONSTANT_COUNT;i++) {
+                    memcpy(object->embedded_constants[first+i],declaration+1+4*i,16);
+                    object->embedded_present[first+i]=1;
+                }
+                declaration+=count*4;
+            }
 			break;
 		case D3DVSD_TOKEN_EXT:
 			declaration += (token & D3DVSD_EXTCOUNTMASK) >> D3DVSD_EXTCOUNTSHIFT;
@@ -3065,12 +3166,20 @@ void WINAPI D3DDevice_DeleteVertexShader(DWORD handle)
 	(void)handle;
 }
 
+static void load_embedded_constants(const struct vertex_shader_object *object)
+{
+    unsigned i;
+    for(i=0;i<XGPU_VERTEX_CONSTANT_COUNT;i++)
+        if(object->embedded_present[i]) constants_store(i,object->embedded_constants[i],1);
+}
+
 void WINAPI D3DDevice_SetVertexShader(DWORD handle)
 {
 	struct vertex_shader_object *object = vertex_shader_from_handle(handle);
 
 	if (object)
 	{
+		load_embedded_constants(object);
 		device.vertex_shader = object;
 		device.program_address = 0;
 		device.program_slots[0] = object;
@@ -3088,8 +3197,10 @@ void WINAPI D3DDevice_SetVertexShader(DWORD handle)
 
 void WINAPI D3DDevice_LoadVertexShader(DWORD handle, DWORD address)
 {
+	struct vertex_shader_object *object=vertex_shader_from_handle(handle);
+	if(object) load_embedded_constants(object);
 	if (address < VERTEX_PROGRAM_SLOTS)
-		device.program_slots[address] = vertex_shader_from_handle(handle);
+		device.program_slots[address] = object;
 }
 
 void WINAPI D3DDevice_SelectVertexShader(DWORD handle, DWORD address)
@@ -4304,11 +4415,14 @@ static struct program_entry *prepare_draw(BOOL immediate)
 	}
 	memset(&key, 0, sizeof(key));
 	memcpy(key.combiner_state, D3D__RenderState, sizeof(key.combiner_state));
+	if (fixed_combiners_active)
+		memcpy(key.combiner_state, fixed_combiner_state, sizeof(key.combiner_state));
 	/* constants are uniforms, not part of the program */
 	memset(&key.combiner_state[D3DRS_PSCONSTANT0_0], 0, 16 * sizeof(DWORD));
 	key.combiner_state[D3DRS_PSFINALCOMBINERCONSTANT0] = 0;
 	key.combiner_state[D3DRS_PSFINALCOMBINERCONSTANT1] = 0;
 	key.texture_modes = D3D__RenderState[D3DRS_PSTEXTUREMODES];
+	if (fixed_combiners_active) key.texture_modes=fixed_texture_modes;
 	/* the textures before the targets: a render target the draw samples
 	has its multisampled pixels resolved by a blit (render_target_resolve),
 	which binds framebuffers of its own, and the back buffer can be both
@@ -4589,6 +4703,16 @@ static void trace_draw(const char *kind, D3DPRIMITIVETYPE type, unsigned long co
 
 	if (!trace_frame())
 		return;
+    if (device.up_vertices) {
+        const float *v = device.up_vertices;
+        platform_log("    UP first = %g %g %g %g stride=%u", v[0],v[1],v[2],v[3],device.streams[0].stride);
+        platform_log("    UP color=%08lx uv=%g,%g",((const DWORD *)v)[4],v[5],v[6]);
+    }
+    {
+        unsigned i;
+        for (i=0;i<57;i+=4)
+            platform_log("    PS[%u]=%08lx %08lx %08lx %08lx",i,rs[i],rs[i+1],rs[i+2],rs[i+3]);
+    }
 	platform_log("%s type %d count %lu vs %lu (decl %lu) vp %lu,%lu %lux%lu z%.2f-%.2f zen %lu zw %lu zf %lx blend %lu %lx/%lx cull %lx cw %08lx tm %05lx cc %lx fin %08lx/%08lx at %lu/%lx",
 		kind, type, count, program ? program->id : 0, device.vertex_shader ? device.vertex_shader->id : 0,
 		device.viewport.X, device.viewport.Y, device.viewport.Width, device.viewport.Height,
@@ -5617,7 +5741,7 @@ static void fvf_draw(D3DPRIMITIVETYPE type, UINT start, UINT count, const WORD *
 
 void WINAPI D3DDevice_DrawVertices(D3DPRIMITIVETYPE primitive_type, UINT start_vertex, UINT vertex_count)
 {
-    if (getenv("RECOMP_D3D8GL_TRACE"))
+    if (noble_d3d8_trace_enabled())
         fprintf(stderr, "[D3D8GL] draw prim=%u start=%u count=%u fixed=%d fvf=%08X shader=%p up=%p stride=%u\n",
                 (unsigned)primitive_type, start_vertex, vertex_count,
                 (int)device.fixed_function, (unsigned)device.fvf,
@@ -5629,7 +5753,7 @@ void WINAPI D3DDevice_DrawVertices(D3DPRIMITIVETYPE primitive_type, UINT start_v
     }
     if (!vertex_count) return;
     if (!prepare_draw(FALSE)) {
-        if (getenv("RECOMP_D3D8GL_TRACE"))
+        if (noble_d3d8_trace_enabled())
             fprintf(stderr, "[D3D8GL] draw rejected by prepare_draw\n");
         return;
     }
@@ -5649,6 +5773,11 @@ void WINAPI D3DDevice_DrawVertices(D3DPRIMITIVETYPE primitive_type, UINT start_v
 		glDrawArrays(primitive_mode(primitive_type), 0, (GLsizei)vertex_count);
 	}
 	gl_check_errors("draw");
+    if(trace_frame()) {
+        DWORD pixel=0;
+        glReadPixels(320,240,1,1,GL_BGRA,GL_UNSIGNED_BYTE,&pixel);
+        platform_log("    DRAW center=%08lx GLerr=%x",pixel,(unsigned)glGetError());
+    }
 }
 
 #ifdef HALO_WEB
@@ -5838,7 +5967,7 @@ void WINAPI D3DDevice_DrawIndexedVertices(D3DPRIMITIVETYPE primitive_type, UINT 
 	GLuint index_buffer = 0;
 	BOOL mirrored;
 
-    if (getenv("RECOMP_D3D8GL_TRACE"))
+    if (noble_d3d8_trace_enabled())
         fprintf(stderr, "[D3D8GL] idraw prim=%u count=%u fixed=%d fvf=%08X shader=%p base=%u\n",
                 (unsigned)primitive_type, vertex_count,
                 (int)device.fixed_function, (unsigned)device.fvf,
@@ -6990,6 +7119,11 @@ static void fvf_draw(D3DPRIMITIVETYPE type, UINT start, UINT count, const WORD *
 
 void noble_d3d8_draw_up_host(unsigned primitive, unsigned count, const void *vertices, unsigned stride)
 {
+    if (noble_d3d8_trace_enabled()) {
+        fprintf(stderr, "[D3D8GL] host ENTER prim=%u count=%u verts=%p stride=%u\n",
+                primitive, count, vertices, stride);
+        fflush(stderr);
+    }
     DWORD old_data = device.streams[0].data;
     unsigned old_stride = device.streams[0].stride;
     const void *old_up = device.up_vertices;
@@ -6997,6 +7131,10 @@ void noble_d3d8_draw_up_host(unsigned primitive, unsigned count, const void *ver
     device.streams[0].data = vertices ? 1 : 0;
     device.streams[0].stride = stride;
     D3DDevice_DrawVertices((D3DPRIMITIVETYPE)primitive, 0, count);
+    if (noble_d3d8_trace_enabled()) {
+        fprintf(stderr, "[D3D8GL] host RETURN\n");
+        fflush(stderr);
+    }
     device.streams[0].data = old_data;
     device.streams[0].stride = old_stride;
     device.up_vertices = old_up;
@@ -7061,13 +7199,17 @@ int noble_d3d8_readback_host(D3DSurface *surface)
                     PLATFORM_PHYSICAL_TO_VIRTUAL(surface->Data));
     error = glGetError();
 
-    if (getenv("RECOMP_D3D8GL_DUMP_READBACK")) {
+    {
+        static unsigned reads;
+        const char *directory=getenv("RECOMP_D3D8GL_DUMP_READBACK");
+        unsigned read=reads++;
+    if (directory && (read<3 || !(read%300))) {
         static unsigned dump_no;
         const unsigned char *px = (const unsigned char *)
             PLATFORM_PHYSICAL_TO_VIRTUAL(surface->Data);
-        char path[128];
+        char path[512];
         FILE *f;
-        sprintf(path, "output/d3d8gl_readback_%u.bmp", dump_no++);
+        snprintf(path,sizeof(path), "%s/d3d8gl_readback_%u.bmp", strcmp(directory,"1")?directory:"output", read);
         f = fopen(path, "wb");
         if (f && px) {
             unsigned row = (description.width * 3u + 3u) & ~3u;
@@ -7102,6 +7244,7 @@ int noble_d3d8_readback_host(D3DSurface *surface)
                 description.width, description.height,
                 (unsigned)entry->target.texture,
                 px ? *(const unsigned *)px : 0, (int)error, path);
+    }
     }
     glBindFramebuffer(GL_READ_FRAMEBUFFER, framebuffer);
     glBindBuffer(GL_PIXEL_PACK_BUFFER, pack_buffer);

@@ -39,6 +39,8 @@ typedef int (*readback_fn)(unsigned);
 typedef void (*pair_fn)(unsigned, unsigned);
 typedef void (*vertex2_fn)(unsigned, unsigned, unsigned);
 typedef void (*vertex4_fn)(unsigned, unsigned, unsigned, unsigned, unsigned);
+typedef int (*fixed_function_fn)(unsigned, unsigned, unsigned);
+typedef int (*copy_rects_fn)(unsigned,unsigned,unsigned,unsigned,unsigned);
 
 static HMODULE g_module;
 static int g_ready;
@@ -73,11 +75,34 @@ static vertex4_fn p_vertex4f;
 static pair_fn p_vertex_color;
 static pair_fn p_load_vertex_shader;
 static pair_fn p_select_vertex_shader;
+static fixed_function_fn p_fixed_function;
+static copy_rects_fn p_copy_rects;
 static int g_host_ready;
 static __declspec(thread) int g_guest_only;
+static int hle_trace_enabled(void)
+{
+    static int enabled=-1;
+    if(enabled<0) enabled=getenv("RECOMP_D3D8GL_TRACE")!=NULL;
+    return enabled;
+}
+static double g_hle_cost[5];
+static double hle_time(void)
+{
+    static int enabled=-1;
+    static LARGE_INTEGER frequency;
+    LARGE_INTEGER now;
+    if(enabled<0) {
+        enabled=getenv("RECOMP_GPU_STATS")!=NULL;
+        QueryPerformanceFrequency(&frequency);
+    }
+    if(!enabled) return 0;
+    QueryPerformanceCounter(&now);
+    return (double)now.QuadPart*1000.0/frequency.QuadPart;
+}
 
 extern void sub_003BB4C0(void);
 extern void sub_003B86E0(void);
+extern void sub_003C3D10(void);
 extern void xbox_FramebufferWindowSet(uint32_t, uint32_t);
 extern void xbox_FramebufferWindowPresent(uint32_t, uint32_t);
 extern void xbox_FramebufferWindowSetAA(uint32_t);
@@ -131,9 +156,11 @@ static int load_dll(void)
     LOAD(vertex_color, pair_fn);
     LOAD(load_vertex_shader, pair_fn);
     LOAD(select_vertex_shader, pair_fn);
+    LOAD(fixed_function, fixed_function_fn);
+    LOAD(copy_rects,copy_rects_fn);
 #undef LOAD
     g_ready = 1;
-    if (getenv("RECOMP_D3D8GL_TRACE")) {
+    if (hle_trace_enabled()) {
         char path[MAX_PATH];
         HMODULE by_addr = NULL;
         FARPROC exp = GetProcAddress(g_module, "noble_d3d8_draw_up");
@@ -183,10 +210,50 @@ static unsigned host_shader(unsigned guest)
     return 0;
 }
 
+/* The guest stores programmable PS state in a shadow array, but compiles
+ * fixed-function TSS directly into pushbuffer methods only at draw time.
+ * Run that state compiler in isolated guest-stack scratch; do not submit a
+ * guest draw or change the real pushbuffer cursor. */
+static int prepare_pixel_shader(uint32_t device)
+{
+    uint32_t ps=MEM32(device+0x784);
+    if(ps) {
+        p_pixel_shader(MEM32(ps+8));
+        return 1;
+    }
+    {
+        uint32_t regs[]={g_eax,g_ecx,g_edx,g_ebx,g_esi,g_edi,g_esp,g_ebp,g_seh_ebp};
+        uint32_t cursor=MEM32(device),limit=MEM32(device+4),flags=MEM32(device+8);
+        uint32_t scratch=g_esp-0x400, end, modes=0;
+        unsigned stage;
+        int ok;
+        MEM32(device)=scratch; MEM32(device+4)=scratch+0x100;
+        g_esp-=0x100;
+        PUSH32(g_esp,MEM32(0x003C6AF8u));
+        PUSH32(g_esp,device);
+        PUSH32(g_esp,0);
+        g_guest_only=1;
+        sub_003C3D10();
+        g_guest_only=0;
+        end=MEM32(device);
+        MEM32(device)=cursor; MEM32(device+4)=limit; MEM32(device+8)=flags;
+        g_eax=regs[0];g_ecx=regs[1];g_edx=regs[2];g_ebx=regs[3];g_esi=regs[4];
+        g_edi=regs[5];g_esp=regs[6];g_ebp=regs[7];g_seh_ebp=regs[8];
+        for(stage=0;stage<4;stage++) {
+            uint32_t texture=MEM32(device+0xF88+4*stage);
+            if(texture) modes|=((MEM32(texture+12)&4)?3u:1u)<<(5*stage);
+        }
+        ok=end>=scratch && end<=scratch+0x100 && !((end-scratch)&3) &&
+            p_fixed_function(scratch,(end-scratch)/4,modes);
+        return ok;
+    }
+}
+
 int noble_d3d8_guest_call(uint32_t va, uint32_t cleanup)
 {
     static int enabled = -1;
     uint32_t device;
+    double submit_start;
     if (enabled < 0) {
         const char *value=getenv("RECOMP_D3D8GL");
         enabled=value && *value && strcmp(value,"0");
@@ -211,11 +278,25 @@ int noble_d3d8_guest_call(uint32_t va, uint32_t cleanup)
     if (!g_host_ready) return 0;
     device=MEM32(0x003C6F98u);
     if (!device) return 0;
-    /* Loading a guest vertex program can unpack embedded constants directly
-     * into this shadow array without calling any constant API entry point. */
+    /* Draws must retain raw constant uploads, which need not update the
+     * guest shadow. Embedded constants are synchronized at shader loading. */
     if (va==0x003BA740u || va==0x003BA8B0u || va==0x003BA9F0u || va==0x003BAD40u) {
-        p_vertex_constants(-96,0x003C5EE0u,192);
+        double prepare_start=hle_time();
+        if(!prepare_pixel_shader(device)) {
+            fprintf(stderr,"[D3D8HLE] unsupported fixed-function state; stopping instead of discarding a draw\n");
+            ExitProcess(1);
+        }
+        g_hle_cost[3]+=hle_time()-prepare_start;
         p_viewport(device+0xEE0); /* Recompute the reserved viewport constants. */
+        if (hle_trace_enabled()) {
+            static unsigned draws;
+            if (draws++<5) {
+                uint32_t ps=MEM32(device+0x784);
+                fprintf(stderr,"[D3D8HLE] draw state flags=%08X ps=%08X def=%08X tex=%08X,%08X,%08X,%08X\n",
+                    MEM32(device+8),ps,ps?MEM32(ps+8):0,
+                    MEM32(device+0xF88),MEM32(device+0xF8C),MEM32(device+0xF90),MEM32(device+0xF94));
+            }
+        }
     }
     {
         static uint32_t seen[32];
@@ -232,11 +313,13 @@ int noble_d3d8_guest_call(uint32_t va, uint32_t cleanup)
 
     /* Mirror setters, then let the guest maintain references and shadow data.
      * Only complete draw/clear operations are suppressed. */
+    submit_start=hle_time();
     switch (va) {
     case 0x003B6520u: { /* Swap(flags), NOT SetRenderTarget. */
         static unsigned trace_swaps;
         uint32_t surface=MEM32(device+0x1A04);
         int readback=p_readback(surface);
+        g_hle_cost[0]+=hle_time()-submit_start;
         if (trace_swaps++<3)
             fprintf(stderr,"[D3D8HLE] swap surface=%08X data=%08X format=%08X size=%08X readback=%d\n",
                     surface,MEM32(surface+4),MEM32(surface+12),MEM32(surface+16),readback);
@@ -253,10 +336,31 @@ int noble_d3d8_guest_call(uint32_t va, uint32_t cleanup)
                 xbox_FramebufferWindowPresent(data,pitch);
             }
         }
-        p_present();
+        {
+            static unsigned measured_frames;
+            double present_start=hle_time();
+            unsigned i;
+            p_present();
+            g_hle_cost[1]+=hle_time()-present_start;
+            if(++measured_frames==120 && present_start) {
+                fprintf(stderr,"[HLE-PERF] readback=%.2f present=%.2f submit=%.2f prepare=%.2f copy=%.2f ms/frame\n",
+                    g_hle_cost[0]/120,g_hle_cost[1]/120,g_hle_cost[2]/120,g_hle_cost[3]/120,g_hle_cost[4]/120);
+                for(i=0;i<5;i++) g_hle_cost[i]=0;
+                measured_frames=0;
+            }
+        }
         return 0; /* Guest buffer rotation, counter and pacing run once. */
     }
     case 0x003B6FB0u: p_render_target(arg(0),arg(1)); return 0;
+    case 0x003B7280u: {
+        static unsigned copies;
+        int copied=p_copy_rects(arg(0),arg(1),arg(2),arg(3),arg(4));
+        g_hle_cost[4]+=hle_time()-submit_start;
+        if(copies++<3) fprintf(stderr,"[D3D8HLE] copy src=%08X dst=%08X count=%u gpu=%d\n",
+            MEM32(arg(0)+4),MEM32(arg(3)+4),arg(2),copied);
+        if(!copied) return 0;
+        break;
+    }
     case 0x003B75F0u: p_viewport(arg(0)); return 0;
     case 0x003B6B80u: p_transform(arg(0),arg(1)); return 0;
     case 0x003B7820u: p_texture(arg(0),arg(1)); return 0;
@@ -285,7 +389,8 @@ int noble_d3d8_guest_call(uint32_t va, uint32_t cleanup)
     case 0x003B8E30u: p_vertex_shader(host_shader(arg(0))); return 0;
     case 0x003B8AE0u: p_load_vertex_shader(host_shader(arg(0)),arg(1)); return 0;
     case 0x003B8B40u: p_select_vertex_shader(host_shader(arg(0)),arg(1)); return 0;
-    case 0x003BAE20u: p_pixel_shader(arg(0)); return 0;
+    case 0x003BAE20u: /* Guest shader object owns the definition at +8. */
+        p_pixel_shader(arg(0)?MEM32(arg(0)+8):0); return 0;
     case 0x003B66D0u: {
         uint32_t bits=arg(4);
         float z;
@@ -294,23 +399,23 @@ int noble_d3d8_guest_call(uint32_t va, uint32_t cleanup)
         break;
     }
     case 0x003BA740u:
-        if (getenv("RECOMP_D3D8GL_TRACE"))
+        if (hle_trace_enabled())
             fprintf(stderr,"[D3D8HLE] DRAW_UP prim=%u count=%u data=%08X stride=%u\n",
                     arg(0),arg(1),arg(2),arg(3));
-        if (getenv("RECOMP_D3D8GL_TRACE"))
+        if (hle_trace_enabled())
             fprintf(stderr,"[D3D8HLE] DRAW_UP host=%p before\n",(void*)p_draw_up);
         p_draw_up(arg(0),arg(1),arg(2),arg(3));
-        if (getenv("RECOMP_D3D8GL_TRACE"))
+        if (hle_trace_enabled())
             fprintf(stderr,"[D3D8HLE] DRAW_UP after\n");
         break;
     case 0x003BA8B0u:
-        if (getenv("RECOMP_D3D8GL_TRACE"))
+        if (hle_trace_enabled())
             fprintf(stderr,"[D3D8HLE] DRAW_IDX_UP prim=%u count=%u idx=%08X data=%08X stride=%u\n",
                     arg(0),arg(1),arg(2),arg(3),arg(4));
         p_draw_indexed_up(arg(0),arg(1),arg(2),arg(3),arg(4));
         break;
     case 0x003BA9F0u:
-        if (getenv("RECOMP_D3D8GL_TRACE"))
+        if (hle_trace_enabled())
             fprintf(stderr,"[D3D8HLE] DRAW_IDX prim=%u count=%u idx=%08X\n",
                     arg(0),arg(1),arg(2));
         p_draw_indexed(arg(0),arg(1),arg(2));
@@ -323,6 +428,7 @@ int noble_d3d8_guest_call(uint32_t va, uint32_t cleanup)
     default: return 0; /* Includes SetTile and raw method emission. */
     }
     g_eax=0;
+    if(va!=0x003B7280u) g_hle_cost[2]+=hle_time()-submit_start;
     g_esp+=cleanup;
     return 1;
 }

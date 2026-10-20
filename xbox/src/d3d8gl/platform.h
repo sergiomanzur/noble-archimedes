@@ -19,6 +19,7 @@
 
 /* XDK types (D3DDevice, D3DBaseTexture, DWORD, ...). */
 #include <xtl.h>
+typedef struct { int32_t x,y; } NobleD3DPoint;
 
 #ifdef __cplusplus
 extern "C" {
@@ -26,6 +27,7 @@ extern "C" {
 
 /* ---------- logging ---------- */
 void platform_log(const char *format, ...);
+int noble_d3d8_trace_enabled(void);
 void platform_unimplemented(const char *name);
 
 /* ---------- contiguous / physical memory ---------- */

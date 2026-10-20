@@ -28,14 +28,14 @@ reports progressive scan with the live host vblank counter, so XMV frame
 scheduling advances even when the guest D3D vblank counter is not updated.
 `prepare_generated.py` reapplies both hooks after local regeneration.
 
-## Performance (2026-10-19)
-The software rasteriser runs the title screen and main menu at 58-61 fps and
-the 2D options/pause menu at ~56 fps; the measured 3D courtyard is 21-36 fps
-depending on the section. The D3D11 queue backend (`RECOMP_GPU_RASTER=1`) now
-renders the whole title/menu correctly at 57-59 fps, but its one-draw-per-
-triangle submission is slower than the software path in 3D, so the software
-rasteriser remains the default. 60 fps 3D gameplay still needs batched GPU
-submission or a GPU/VSH path; stencil shadows are also still missing.
+## Performance (2026-10-19, post pre-work)
+The software rasteriser now measures title 59 fps, menu 40 fps (static UI;
+about 60% unique images), cutscene 57 fps, courtyard 31.5 fps, pause 53 fps
+and post-movement courtyard 32 fps in the benchmark harness. The P8 UI path
+now samples the palette per texel for quads; p8 fell from 6-14 ms/frame to
+0.8-1.0 ms/frame. The default remains software; D3D11 is still opt-in and not
+yet a 60 fps path. Frame-exact input/capture and the pause/movie presentation
+path are the next prerequisites.
 
 ## Benchmark
 

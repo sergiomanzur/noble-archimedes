@@ -5,6 +5,41 @@ belong in version control. Running this script twice leaves files unchanged.
 """
 from pathlib import Path
 import argparse
+import re
+
+
+# Audited from translated guest instructions. Cleanup includes the return VA.
+D3D8_ENTRIES = {
+    "003BB4C0": 28, "003B6520": 8, "003B66D0": 28,
+    "003B6FB0": 12, "003B6B80": 12, "003B75F0": 8,
+    "003B7820": 12, "003B79D0": 12, "003B7A60": 12,
+    "003B86E0": 20, "003B8820": 4, "003B8880": 4,
+    "003B8930": 8, "003B8A50": 16, "003B8E30": 8,
+    "003BA740": 20, "003BA8B0": 24, "003BA9F0": 16,
+    "003BAE20": 8,
+    "003B8AE0": 12, "003B8B40": 12,
+    "003BAD40": 8, "003BAD80": 4,
+    "003BAC50": 16, "003BAC90": 24, "003BACF0": 12,
+}
+
+
+def repair_d3d8(source: str) -> str:
+    # Replace old, guessed hooks and make replay idempotent. Keep the guest
+    # implementations in place; the bridge decides which calls it can handle.
+    source = re.sub(r"^    if \(noble_d3d8_guest_call\(0x[0-9A-Fa-f]+u, \d+u\)\) return;\n",
+                    "", source, flags=re.MULTILINE)
+    used = False
+    for address, cleanup in D3D8_ENTRIES.items():
+        entry = f"void sub_{address}(void)\n{{\n"
+        if entry in source:
+            source = source.replace(entry, entry +
+                f"    if (noble_d3d8_guest_call(0x{address}u, {cleanup}u)) return;\n", 1)
+            used = True
+    declaration = "extern int noble_d3d8_guest_call(uint32_t va, uint32_t cleanup);"
+    if used and declaration not in source:
+        source = source.replace('#include "recomp_funcs.h"',
+                                '#include "recomp_funcs.h"\n' + declaration, 1)
+    return source
 
 
 def repair_xmv(source: str) -> str:
@@ -83,7 +118,7 @@ def main():
         if not path.exists():
             continue
         source = path.read_text(encoding="utf-8")
-        repaired = repair_xmv(repair_renderer(source))
+        repaired = repair_d3d8(repair_xmv(repair_renderer(source)))
         if repaired != source:
             path.write_text(repaired, encoding="utf-8", newline="\n")
             print(f"Prepared generated host integration: {path.name}")

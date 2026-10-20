@@ -411,10 +411,29 @@ void noble_d3d8_set_state_arrays(const DWORD *render_state,
 
 void noble_d3d8_sync_state(void)
 {
-    if (guest_render_state)
-        memcpy(D3D__RenderState, guest_render_state, sizeof(D3D__RenderState));
-    if (guest_texture_state)
-        memcpy(D3D__TextureState, guest_texture_state, sizeof(D3D__TextureState));
+    if (guest_render_state) {
+        unsigned state;
+        /* The title's XDK adds twenty deferred states before the specialized
+         * setters (guest state136 versus Halo state116), and adds the
+         * multisample target mode at155. The guest's setter jump table at
+         * 0x003C4680 and emitted NV2A methods establish the correspondence. */
+        for (state = 0; state < D3DRS_MAX; state++) {
+            unsigned guest_state = state < 116 ? state : state < 135 ? state + 20 : state + 21;
+            D3D__RenderState[state] = guest_render_state[guest_state];
+        }
+    }
+    if (guest_texture_state) {
+        unsigned stage, state;
+        /* XDK 5849 stores sampler states first. Halo's older XDK enum
+         * starts with the ten fixed-function texture blend states. The
+         * four stage blocks still have the same 32-DWORD stride.
+         * Guest sub_003B9A40 and sub_003BD5C0 establish this layout. */
+        for (stage = 0; stage < D3DTSS_MAXSTAGES; stage++)
+            for (state = 0; state < D3DTSS_MAX; state++) {
+                unsigned guest_state = state < 10 ? state + 12 : state < 22 ? state - 10 : state;
+                D3D__TextureState[stage][state] = guest_texture_state[stage][guest_state];
+            }
+    }
 }
 WORD *D3D__IndexData;
 BYTE D3D__StateBlockDirty[1024];
@@ -656,6 +675,8 @@ struct gl_device
 	/* SetVertexShader chose the fixed-function pipeline (with 0): the
 	loading screen's draws (fixed_function_program) */
 	BOOL fixed_function;
+	DWORD fvf;
+	const void *up_vertices;
 	struct vertex_shader_object *program_slots[VERTEX_PROGRAM_SLOTS];
 	unsigned long program_address;
 	float constants[XGPU_VERTEX_CONSTANT_COUNT][4];
@@ -2228,6 +2249,10 @@ HRESULT WINAPI Direct3D_CreateDevice(UINT adapter, D3DDEVTYPE device_type, void 
 			gl_initialize();
 		else
 			platform_log("Direct3D: running without a window (nothing is displayed)");
+        /* A successfully created host device must have a usable GL context.
+         * Leave failure retryable rather than silently reporting a null renderer. */
+        if (!device.gl_ready)
+            return E_FAIL;
 		device.created = TRUE;
 	}
 	*returned_device = device_pointer();
@@ -2465,6 +2490,9 @@ void WINAPI D3DDevice_SetRenderTarget(D3DSurface *render_target, D3DSurface *dep
 
 void WINAPI D3DDevice_SetViewport(CONST D3DVIEWPORT8 *viewport)
 {
+    /* Xbox allows NULL to reapply the current viewport after a state
+     * transition (guest sub_003B77E3). There is no replacement struct. */
+    if (!viewport) return;
 	device.viewport = *viewport;
 	viewport_update_constants();
 }
@@ -2998,7 +3026,8 @@ HRESULT WINAPI D3DDevice_CreateVertexShader(CONST DWORD *declaration, CONST DWOR
 		memcpy(object->instructions, function + 1, object->instruction_count * 4 * sizeof(DWORD));
 	}
 	parse_declaration(object, declaration);
-	/* odd values are FVF codes; programmable shader handles are even */
+	/* Private host object handles are aligned pointers. Guest tagged shader
+     * handles are translated by the bridge; ordinary FVF codes stay small. */
 	*handle = (DWORD)object;
 	return S_OK;
 }
@@ -3007,7 +3036,7 @@ static struct vertex_shader_object *vertex_shader_from_handle(DWORD handle)
 {
 	struct vertex_shader_object *object = (struct vertex_shader_object *)handle;
 
-	if (!handle || (handle & 1) || object->signature != VERTEX_SHADER_SIGNATURE)
+	if (handle < 0x00100000u || (handle & 1) || object->signature != VERTEX_SHADER_SIGNATURE)
 		return NULL;
 	return object;
 }
@@ -3046,12 +3075,15 @@ void WINAPI D3DDevice_SetVertexShader(DWORD handle)
 		device.program_address = 0;
 		device.program_slots[0] = object;
 		device.fixed_function = FALSE;
+        device.fvf = 0;
 	}
 	/* 0: the fixed-function pipeline, which only the loading screen uses
 	(progress_bar.c). Another handle that is no shader (NONE, of a shader
 	that could not be made) changes nothing, as before */
-	else if (!handle)
-		device.fixed_function = TRUE;
+    else if (handle < 0x00100000u && !(handle & 1)) {
+        device.fvf = handle;
+        device.fixed_function = TRUE;
+    }
 }
 
 void WINAPI D3DDevice_LoadVertexShader(DWORD handle, DWORD address)
@@ -4830,6 +4862,11 @@ static BOOL mirror_range(unsigned long address, unsigned long size, GLuint *buff
 	unsigned long segment, first, last, page, oldest = ~0UL, newest = 0;
 	BOOL present = TRUE;
 
+    /* The standalone recomp cannot observe guest stores with OpenCE's page
+     * write-watch hooks. Re-upload streams instead of caching stale vertices
+     * or indices, including modifications between draws in one frame. */
+    return FALSE;
+
 	if (!size || address < PLATFORM_CONTIGUOUS_BASE || start + size > PLATFORM_CONTIGUOUS_SIZE)
 		return FALSE;
 	segment = start / MIRROR_SEGMENT_SIZE;
@@ -5408,7 +5445,7 @@ static void setup_streams(unsigned long first, unsigned long count)
 			continue;
 		placed[stream] = TRUE;
 		stream_buffers[stream] = 0;
-		base = (unsigned long)PLATFORM_PHYSICAL_TO_VIRTUAL(device.streams[stream].data) + first * stride;
+		base = (unsigned long)((stream == 0 && device.up_vertices) ? device.up_vertices : PLATFORM_PHYSICAL_TO_VIRTUAL(device.streams[stream].data)) + first * stride;
 #ifdef HALO_GLES
 		if (!stream_has_colors(declaration, stream))
 #endif
@@ -5461,7 +5498,7 @@ static void setup_streams(unsigned long first, unsigned long count)
 			continue;
 		if (!stream_buffers[stream])
 		{
-			const unsigned char *base = PLATFORM_PHYSICAL_TO_VIRTUAL(device.streams[stream].data);
+			const unsigned char *base = (stream == 0 && device.up_vertices) ? device.up_vertices : PLATFORM_PHYSICAL_TO_VIRTUAL(device.streams[stream].data);
 			unsigned long bytes = stride ? stride * count : 64;
 
 #ifdef HALO_GLES
@@ -5573,11 +5610,17 @@ void WINAPI D3DDevice_SetStreamSource(UINT stream_number, D3DVertexBuffer *strea
 void WINAPI D3DDevice_SetIndices(D3DIndexBuffer *index_data, UINT base_vertex_index)
 {
 	device.base_vertex_index = base_vertex_index;
-	D3D__IndexData = index_data ? (WORD *)index_data->Data : NULL;
+	D3D__IndexData = index_data ? (WORD *)noble_guest_pointer(index_data->Data) : NULL;
 }
+
+static void fvf_draw(D3DPRIMITIVETYPE type, UINT start, UINT count, const WORD *indices);
 
 void WINAPI D3DDevice_DrawVertices(D3DPRIMITIVETYPE primitive_type, UINT start_vertex, UINT vertex_count)
 {
+    if (device.fixed_function && device.fvf) {
+        fvf_draw(primitive_type, start_vertex, vertex_count, NULL);
+        return;
+    }
 	if (!vertex_count || !prepare_draw(FALSE))
 		return;
 	trace_draw("draw", primitive_type, vertex_count, NULL);
@@ -5785,6 +5828,11 @@ void WINAPI D3DDevice_DrawIndexedVertices(D3DPRIMITIVETYPE primitive_type, UINT 
 	GLuint index_buffer = 0;
 	BOOL mirrored;
 
+    if (!index_data) return;
+    if (device.fixed_function && device.fvf) {
+        fvf_draw(primitive_type, device.base_vertex_index, vertex_count, index_data);
+        return;
+    }
 	if (!vertex_count || !index_data || !prepare_draw(FALSE))
 		return;
 	/* quads are drawn as triangles, from indices made for the draw */
@@ -5886,7 +5934,7 @@ void WINAPI D3DDevice_End(void)
 	if (!count || !prepare_draw(TRUE))
 		return;
 	/* (the fixed-function pipeline's: positions into clip space) */
-	if (device.fixed_function)
+	if (device.fixed_function && (device.fvf & 0x0Eu) != 0x04u)
 	{
 		for (index = 0; index < count; index++)
 			fixed_function_transform(device.immediate_vertices + index * XGPU_VERTEX_ATTRIBUTE_COUNT * 4);
@@ -6870,3 +6918,152 @@ HRESULT WINAPI D3DDevice_PersistDisplay(void)
 	return S_OK;
 }
 
+
+/* The title uses ordinary unlit FVF streams as well as programmable shaders.
+ * Expand these into the existing immediate pipeline. This path deliberately
+ * rejects blend-weight and >4-stage formats instead of reading a wrong layout. */
+static void fvf_draw(D3DPRIMITIVETYPE type, UINT start, UINT count, const WORD *indices)
+{
+    const unsigned char *base = device.up_vertices ? device.up_vertices :
+        PLATFORM_PHYSICAL_TO_VIRTUAL(device.streams[0].data);
+    DWORD fvf = device.fvf, position = fvf & 0x0Eu;
+    unsigned tex_count = (fvf >> 8) & 15u, i, stage;
+    unsigned stride = device.streams[0].stride;
+    unsigned bytes = position == 4 ? 16 : 12;
+    if ((!device.up_vertices && !device.streams[0].data) || !base || !count ||
+        (position != 2 && position != 4) || tex_count > 4)
+        return;
+    if (position == 4 && (!device.viewport.Width || !device.viewport.Height)) return;
+    if (fvf & 0x10u) bytes += 12; /* normal */
+    if (fvf & 0x40u) bytes += 4;
+    if (fvf & 0x80u) bytes += 4;
+    for (stage = 0; stage < tex_count; stage++) {
+        unsigned encoding = (fvf >> (16 + stage * 2)) & 3u;
+        bytes += (encoding == 0 ? 2 : encoding == 1 ? 3 : encoding == 2 ? 4 : 1) * 4;
+    }
+    if (stride < bytes || !device.gl_ready) return;
+    D3DDevice_Begin(type);
+    device.immediate_written = 1u | (1u << 3) | (1u << 4);
+    for (stage = 0; stage < tex_count; stage++) device.immediate_written |= 1u << (9 + stage);
+    for (i = 0; i < count; i++) {
+        const unsigned char *p = base + (size_t)(start + (indices ? indices[i] : i)) * stride;
+        float *v = device.attributes[0];
+        memset(device.attributes, 0, sizeof(device.attributes));
+        for (stage = 0; stage < XGPU_VERTEX_ATTRIBUTE_COUNT; stage++) device.attributes[stage][3] = 1.0f;
+        device.attributes[3][0] = device.attributes[3][1] = device.attributes[3][2] = 1.0f;
+        memcpy(v, p, position == 4 ? 16 : 12); p += position == 4 ? 16 : 12;
+        if (position == 4) {
+            float w = v[3] != 0.0f ? 1.0f / v[3] : 1.0f;
+            float depth_range = device.viewport.MaxZ - device.viewport.MinZ;
+            v[0] = ((v[0] - device.viewport.X) * 2.0f / device.viewport.Width - 1.0f) * w;
+            v[1] = (1.0f - (v[1] - device.viewport.Y) * 2.0f / device.viewport.Height) * w;
+            v[2] = (depth_range != 0.0f ? (v[2] - device.viewport.MinZ) / depth_range : v[2]) * w;
+            v[3] = w;
+        }
+        if (fvf & 0x10u) { memcpy(device.attributes[2], p, 12); p += 12; }
+        if (fvf & 0x40u) { DWORD color; memcpy(&color, p, 4); color_to_vec4(color, device.attributes[3]); p += 4; }
+        if (fvf & 0x80u) { DWORD color; memcpy(&color, p, 4); color_to_vec4(color, device.attributes[4]); p += 4; }
+        for (stage = 0; stage < tex_count; stage++) {
+            unsigned encoding = (fvf >> (16 + stage * 2)) & 3u;
+            unsigned components = encoding == 0 ? 2 : encoding == 1 ? 3 : encoding == 2 ? 4 : 1;
+            memcpy(device.attributes[9 + stage], p, components * 4); p += components * 4;
+        }
+        immediate_emit();
+    }
+    D3DDevice_End();
+}
+
+void noble_d3d8_draw_up_host(unsigned primitive, unsigned count, const void *vertices, unsigned stride)
+{
+    DWORD old_data = device.streams[0].data;
+    unsigned old_stride = device.streams[0].stride;
+    const void *old_up = device.up_vertices;
+    device.up_vertices = vertices;
+    device.streams[0].data = vertices ? 1 : 0;
+    device.streams[0].stride = stride;
+    D3DDevice_DrawVertices((D3DPRIMITIVETYPE)primitive, 0, count);
+    device.streams[0].data = old_data;
+    device.streams[0].stride = old_stride;
+    device.up_vertices = old_up;
+}
+
+void noble_d3d8_draw_indexed_up_host(unsigned primitive, unsigned count, const WORD *indices,
+                                    const void *vertices, unsigned stride)
+{
+    DWORD old_data = device.streams[0].data;
+    unsigned old_stride = device.streams[0].stride;
+    unsigned old_base = device.base_vertex_index;
+    const void *old_up = device.up_vertices;
+    device.up_vertices = vertices;
+    device.streams[0].data = vertices ? 1 : 0;
+    device.streams[0].stride = stride;
+    device.base_vertex_index = 0;
+    D3DDevice_DrawIndexedVertices((D3DPRIMITIVETYPE)primitive, count, indices);
+    device.streams[0].data = old_data;
+    device.streams[0].stride = old_stride;
+    device.base_vertex_index = old_base;
+    device.up_vertices = old_up;
+}
+
+/* Read a rendered guest surface once at Swap so the existing guest flip and
+ * capture path see the GPU result. GL upper-left clip control makes row zero
+ * the top of the target; no additional vertical flip belongs here. */
+int noble_d3d8_readback_host(D3DSurface *surface)
+{
+    struct render_target_entry *entry;
+    struct xgpu_texture_description description;
+    GLint framebuffer, pack_buffer, alignment, row_length, skip_rows, skip_pixels;
+    GLenum error;
+    if (!device.gl_ready || !surface || !surface->Data) return 0;
+    xgpu_texture_describe(surface->Format, surface->Size, &description);
+    if (!description.linear || (description.format != D3DFMT_LIN_A8R8G8B8 && description.format != D3DFMT_LIN_X8R8G8B8)) return 0;
+    /* Never create a blank GL target just to read it over guest pixels. */
+    if (!xgpu_render_target_find(surface->Data)) return 0;
+    entry = render_target_get(surface);
+    if (!entry || !entry->target.written || entry->target.gl_width != description.width || entry->target.gl_height != description.height)
+        return 0;
+    render_target_resolve(&entry->target);
+    glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &framebuffer);
+    glGetIntegerv(GL_PIXEL_PACK_BUFFER_BINDING, &pack_buffer);
+    glGetIntegerv(GL_PACK_ALIGNMENT, &alignment);
+    glGetIntegerv(GL_PACK_ROW_LENGTH, &row_length);
+    glGetIntegerv(GL_PACK_SKIP_ROWS, &skip_rows);
+    glGetIntegerv(GL_PACK_SKIP_PIXELS, &skip_pixels);
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, framebuffer_get(entry->target.texture, 0));
+    glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
+    glPixelStorei(GL_PACK_ALIGNMENT, 4);
+    glPixelStorei(GL_PACK_ROW_LENGTH, description.pitch / 4);
+    glPixelStorei(GL_PACK_SKIP_ROWS, 0);
+    glPixelStorei(GL_PACK_SKIP_PIXELS, 0);
+    glReadPixels(0, 0, description.width, description.height, GL_BGRA, GL_UNSIGNED_BYTE,
+                    PLATFORM_PHYSICAL_TO_VIRTUAL(surface->Data));
+    error = glGetError();
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, framebuffer);
+    glBindBuffer(GL_PIXEL_PACK_BUFFER, pack_buffer);
+    glPixelStorei(GL_PACK_ALIGNMENT, alignment);
+    glPixelStorei(GL_PACK_ROW_LENGTH, row_length);
+    glPixelStorei(GL_PACK_SKIP_ROWS, skip_rows);
+    glPixelStorei(GL_PACK_SKIP_PIXELS, skip_pixels);
+    xgpu_gl_state_invalidate();
+    return error == GL_NO_ERROR;
+}
+
+/* Host-only presentation owns private boot surfaces. Once the guest starts
+ * drawing, display that actual target while retaining the private allocation
+ * for the lifetime of the device. Copy only the fixed-width header fields:
+ * the incoming Xbox surface has a 32-bit Parent, unlike the native header. */
+void noble_d3d8_present_host(void)
+{
+    D3DSurface saved = device.back_buffer;
+    const D3DSurface *surface = device.render_target;
+    if (surface && surface != &device.back_buffer) {
+        device.back_buffer.Common = surface->Common;
+        device.back_buffer.Data = surface->Data;
+        device.back_buffer.Lock = surface->Lock;
+        device.back_buffer.Format = surface->Format;
+        device.back_buffer.Size = surface->Size;
+        device.back_buffer.Parent = NULL;
+    }
+    D3DDevice_Present(NULL, NULL, NULL, NULL);
+    device.back_buffer = saved;
+}

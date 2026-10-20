@@ -34,6 +34,12 @@ static void low_init(void)
             base = (unsigned char *)VirtualAlloc(
                 NULL, LOW_ARENA_SIZE, MEM_RESERVE | MEM_COMMIT,
                 PAGE_READWRITE);
+        /* Every resource Data word and shader handle is 32 bit. A fallback
+         * outside that range cannot be represented and must fail explicitly. */
+        if (base && ((uintptr_t)base > UINT32_MAX - LOW_ARENA_SIZE)) {
+            VirtualFree(base, 0, 0x8000UL);
+            base = NULL;
+        }
         g_low_next = base;
         g_low_end = base ? base + LOW_ARENA_SIZE : NULL;
         if (!base)
@@ -41,49 +47,83 @@ static void low_init(void)
     }
 }
 
+/* Reusable blocks prevent temporary decoded textures and GLSL strings
+ * from consuming the finite 32-bit arena over a long gameplay session. */
+struct low_block { size_t capacity; struct low_block *next; };
+static struct low_block *low_free_blocks;
 void *noble_low_malloc(size_t size)
 {
-    void *result;
+    struct low_block **link, *block;
+    size_t needed;
     low_init();
-    if (!g_low_next)
-        return NULL;
-    size = (size + 15u) & ~(size_t)15u;
-    if (size == 0)
-        size = 16;
-    if (g_low_next + size > g_low_end) {
-        platform_log("D3D8GL: low host arena exhausted (%zu bytes)", size);
+    if (!g_low_next || size > SIZE_MAX - 31u) return NULL;
+    needed = (size + 15u) & ~(size_t)15u;
+    if (!needed) needed = 16;
+    for (link = &low_free_blocks; (block = *link) != NULL; link = &block->next) {
+        if (block->capacity >= needed) {
+            *link = block->next;
+            if (block->capacity >= needed + sizeof(*block) + 16) {
+                struct low_block *remainder = (struct low_block *)((unsigned char *)(block + 1) + needed);
+                remainder->capacity = block->capacity - needed - sizeof(*block);
+                remainder->next = *link;
+                *link = remainder;
+                block->capacity = needed;
+            }
+            block->next = NULL;
+            return block + 1;
+        }
+    }
+    if (needed + sizeof(*block) > (size_t)(g_low_end - g_low_next)) {
+        platform_log("D3D8GL: low host arena exhausted (request %zu, bump used %zu)", size,
+                     (size_t)(LOW_ARENA_SIZE - (g_low_end - g_low_next)));
         return NULL;
     }
-    result = g_low_next;
-    g_low_next += size;
-    return result;
+    block = (struct low_block *)(void *)g_low_next;
+    block->capacity = needed;
+    block->next = NULL;
+    g_low_next += needed + sizeof(*block);
+    return block + 1;
 }
 
 void *noble_low_calloc(size_t count, size_t size)
 {
-    size_t total = count * size;
-    void *result = noble_low_malloc(total);
-    if (result)
-        memset(result, 0, total);
-    return result;
-}
-
-void *noble_low_realloc(void *pointer, size_t size)
-{
-    void *result = noble_low_malloc(size);
-    if (result && pointer) {
-        /* The old allocation's size is not tracked; TLS shader/string blocks
-         * are small and callers pass the old contents' length implicitly only
-         * through the new size.  The OpenCE layer only reallocs growable text
-         * buffers, so copying the new size is safe within the arena. */
-        memcpy(result, pointer, size);
-    }
+    size_t total;
+    void *result;
+    if (size && count > SIZE_MAX / size) return NULL;
+    total = count * size;
+    result = noble_low_malloc(total);
+    if (result) memset(result, 0, total);
     return result;
 }
 
 void noble_low_free(void *pointer)
 {
-    (void)pointer; /* arena allocations live for the process */
+    struct low_block *block, **link;
+    if (!pointer) return;
+    block = (struct low_block *)pointer - 1;
+    for (link = &low_free_blocks; *link && (uintptr_t)*link < (uintptr_t)block; link = &(*link)->next) {}
+    block->next = *link;
+    *link = block;
+    /* Coalesce in address order, including the predecessor when adjacent. */
+    for (block = low_free_blocks; block && block->next;) {
+        if ((unsigned char *)(block + 1) + block->capacity == (unsigned char *)block->next) {
+            block->capacity += sizeof(*block) + block->next->capacity;
+            block->next = block->next->next;
+        } else block = block->next;
+    }
+}
+
+void *noble_low_realloc(void *pointer, size_t size)
+{
+    void *result;
+    size_t old_size = pointer ? ((struct low_block *)pointer - 1)->capacity : 0;
+    if (pointer && size <= old_size) return pointer;
+    result = noble_low_malloc(size);
+    if (result && pointer) {
+        memcpy(result, pointer, old_size);
+        noble_low_free(pointer);
+    }
+    return result;
 }
 
 /* ---------- logging ---------- */
@@ -145,13 +185,74 @@ BOOL platform_is_contiguous(const void *address)
     return (value >= 0x80000000u && value < 0xA0000000u) ? TRUE : FALSE;
 }
 
-/* ---------- memory watch (the guest pages are not write-protected here) */
+/* ---------- exact memory content generations
+ * The recomp writes guest memory directly, so OpenCE's page fault watcher
+ * cannot see those stores. Compare a snapshot before reusing an upload.
+ * Snapshots use native VirtualAlloc, not the process-lifetime low arena.
+ * The bounded table/budget may evict entries; that only causes reuploads. */
+#define CONTENT_WATCH_SLOTS 2048u
+#define CONTENT_WATCH_BUDGET (64u * 1024u * 1024u)
+static struct {
+    unsigned long address, size, generation;
+    void *snapshot;
+    size_t allocated;
+} content_watch[CONTENT_WATCH_SLOTS];
+static size_t content_snapshot_bytes;
+static unsigned content_evict;
+static unsigned long content_generation = 1;
+static unsigned long content_lookup = 1;
+static void content_watch_drop(unsigned slot)
+{
+    if (content_watch[slot].snapshot) {
+        VirtualFree(content_watch[slot].snapshot, 0, 0x8000UL);
+        content_snapshot_bytes -= content_watch[slot].allocated;
+    }
+    memset(&content_watch[slot], 0, sizeof(content_watch[slot]));
+}
 void memory_watch_initialize(void) {}
 void memory_watch_protect(unsigned long address, unsigned long size) { (void)address; (void)size; }
-unsigned long memory_watch_generation(unsigned long address, unsigned long size) { (void)address; (void)size; return 0; }
-unsigned long memory_watch_serial(void) { return 0; }
+unsigned long memory_watch_generation(unsigned long address, unsigned long size)
+{
+    const void *data = (const void *)(uintptr_t)address;
+    unsigned slot = ((address >> 4) ^ size) % CONTENT_WATCH_SLOTS;
+    size_t allocated;
+    if (!address || !size) return 0;
+    if (content_watch[slot].address != address || content_watch[slot].size != size)
+        content_watch_drop(slot);
+    if (!content_watch[slot].snapshot) {
+        /* Larger resources are conservatively uploaded every use. */
+        if (size > CONTENT_WATCH_BUDGET) return ++content_generation;
+        allocated = ((size_t)size + 4095u) & ~(size_t)4095u;
+        while (content_snapshot_bytes + allocated > CONTENT_WATCH_BUDGET) {
+            content_watch_drop(content_evict++ % CONTENT_WATCH_SLOTS);
+        }
+        content_watch[slot].snapshot = VirtualAlloc(NULL, allocated, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+        if (!content_watch[slot].snapshot) return ++content_generation;
+        content_watch[slot].address = address;
+        content_watch[slot].size = size;
+        content_watch[slot].allocated = allocated;
+        content_snapshot_bytes += allocated;
+        memcpy(content_watch[slot].snapshot, data, size);
+        content_watch[slot].generation = ++content_generation;
+    } else if (memcmp(content_watch[slot].snapshot, data, size)) {
+        memcpy(content_watch[slot].snapshot, data, size);
+        content_watch[slot].generation = ++content_generation;
+    }
+    return content_watch[slot].generation;
+}
+/* Every lookup must inspect the bytes; writes can occur between draws. */
+unsigned long memory_watch_serial(void) { return ++content_lookup; }
 void memory_watch_prepare_write(void *address, unsigned long size) { (void)address; (void)size; }
-void memory_watch_forget(void *address, unsigned long size) { (void)address; (void)size; }
+void memory_watch_forget(void *address, unsigned long size)
+{
+    unsigned slot;
+    uintptr_t first = (uintptr_t)address, last = first + size;
+    for (slot = 0; slot < CONTENT_WATCH_SLOTS; slot++) {
+        uintptr_t begin = content_watch[slot].address;
+        if (content_watch[slot].snapshot && begin < last && begin + content_watch[slot].size > first)
+            content_watch_drop(slot);
+    }
+}
 void memory_watch_begin_frame(void) {}
 
 /* ---------- settings ---------- */

@@ -148,6 +148,19 @@ static void print_guest_context(void *rip)
     memset(buf, 0, sizeof(buf));
     sym->SizeOfStruct = sizeof(SYMBOL_INFO);
     sym->MaxNameLen = 255;
+    /* Optional render backends load after SymInitialize. Include their PDBs
+     * when a failure occurs inside a dynamically loaded renderer. */
+    SymRefreshModuleList(GetCurrentProcess());
+    {
+        HMODULE module;
+        char path[MAX_PATH];
+        if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                              GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                              (LPCSTR)rip, &module) &&
+            GetModuleFileNameA(module,path,MAX_PATH))
+            fprintf(stderr,"  module %s+0x%llX\n",path,
+                    (unsigned long long)((uintptr_t)rip-(uintptr_t)module));
+    }
     if (SymFromAddr(GetCurrentProcess(), (DWORD64)(uintptr_t)rip, &disp, sym))
         fprintf(stderr, "  in %s+0x%llX\n",
                 sym->Name, (unsigned long long)disp);
@@ -375,15 +388,6 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
                     "Recomp", MB_ICONERROR);
         free(xbe_data);
         return 1;
-    }
-
-    /* Opt-in D3D8/OpenGL HLE.  The guest D3D8 library still creates its own
-       device; this only creates the host GL device and points it at the
-       title's guest state arrays. */
-    {
-        const char *d3d8gl = getenv("RECOMP_D3D8GL");
-        if (d3d8gl && strcmp(d3d8gl, "0"))
-            noble_d3d8_init();
     }
 
     g_xbox_mem_offset = xbox_GetMemoryOffset();

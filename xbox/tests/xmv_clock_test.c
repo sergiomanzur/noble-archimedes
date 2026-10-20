@@ -6,6 +6,13 @@ __declspec(thread) uint32_t g_esp, g_eax, g_ecx, g_edx;
 ptrdiff_t g_xbox_mem_offset;
 static uint32_t ticks;
 uint32_t xbox_VblankCount(void) { return ticks; }
+/* Rendering is disabled in this clock-only fixture. */
+void sub_003BB4C0(void) {}
+void sub_003B86E0(void) {}
+void xbox_FramebufferWindowSet(uint32_t a,uint32_t b) { (void)a;(void)b; }
+void xbox_FramebufferWindowPresent(uint32_t a,uint32_t b) { (void)a;(void)b; }
+void xbox_FramebufferWindowSetAA(uint32_t a) { (void)a; }
+void xbox_FramebufferWindowStart(void) {}
 extern int noble_field_status_hook(void);
 #define CHECK(x) do { if (!(x)) { fprintf(stderr,"failed: %s\n",#x); return 1; } } while(0)
 int main(void) {

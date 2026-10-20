@@ -1,8 +1,7 @@
 /*
  * Platform shim for the OpenCE D3D8/OpenGL renderer inside the Castlevania
- * recomp.  The Xbox guest memory is identity-mapped by
- * xbox_MemoryLayoutInit(): guest virtual addresses 0x00000000.. are valid
- * pointers in this process, and the physical window is at 0x80000000.
+ * recomp. Guest virtual addresses are translated using the runtime mapping
+ * offset supplied before device initialization.
  */
 #ifndef NOBLE_D3D8GL_PLATFORM_H
 #define NOBLE_D3D8GL_PLATFORM_H
@@ -39,21 +38,29 @@ void *platform_contiguous_alloc(unsigned long size, unsigned long alignment,
 void platform_contiguous_free(void *address);
 BOOL platform_is_contiguous(const void *address);
 
-/* Guest physical memory (the title's 64 MiB) is the window at 0x80000000.
- * Host allocations are returned as their own pointer by platform_contiguous_alloc,
- * so an address with bit 31 clear and outside the 64 MiB guest range is a host
- * pointer; the renderer only ever hands those to the same mapping functions. */
+/* Guest pointers and resource Data words have different representations.
+ * Export arguments are Xbox VAs; texture/vertex Data words below 64 MiB
+ * are physical offsets, and high Data words are Xbox VAs. The host arena
+ * lives above the guest physical alias and must never receive the offset. */
+extern ptrdiff_t noble_guest_memory_offset;
+static inline void *noble_guest_pointer(uint32_t address)
+{
+    return address ? (void *)((uintptr_t)address + noble_guest_memory_offset) : NULL;
+}
 static inline void *noble_phys_to_virt(unsigned long physical)
 {
     if (physical < 0x04000000UL)
-        return (void *)(uintptr_t)(0x80000000UL + physical);
+        return (void *)((uintptr_t)(0x80000000UL + physical) + noble_guest_memory_offset);
+    if (physical < 0x84000000UL)
+        return noble_guest_pointer((uint32_t)physical);
     return (void *)(uintptr_t)physical;
 }
 static inline unsigned long noble_virt_to_phys(const void *address)
 {
     uintptr_t value = (uintptr_t)address;
-    if (value >= 0x80000000UL && value < 0x84000000UL)
-        return (unsigned long)(value - 0x80000000UL);
+    uintptr_t base = (uintptr_t)0x80000000UL + noble_guest_memory_offset;
+    if (value >= base && value < base + 0x04000000UL)
+        return (unsigned long)(value - base);
     return (unsigned long)value;
 }
 #define PLATFORM_PHYSICAL_TO_VIRTUAL(physical) noble_phys_to_virt((unsigned long)(physical))

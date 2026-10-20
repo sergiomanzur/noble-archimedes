@@ -31,6 +31,14 @@ typedef void (*draw_indexed_fn)(unsigned, unsigned, unsigned);
 typedef void (*scene_fn)(void);
 typedef void (*viewport_fn)(unsigned);
 typedef void (*render_target_fn)(unsigned, unsigned);
+typedef void (*offset_fn)(ptrdiff_t);
+typedef void (*transform_fn)(unsigned, unsigned);
+typedef void (*draw_up_fn)(unsigned, unsigned, unsigned, unsigned);
+typedef void (*draw_indexed_up_fn)(unsigned, unsigned, unsigned, unsigned, unsigned);
+typedef int (*readback_fn)(unsigned);
+typedef void (*pair_fn)(unsigned, unsigned);
+typedef void (*vertex2_fn)(unsigned, unsigned, unsigned);
+typedef void (*vertex4_fn)(unsigned, unsigned, unsigned, unsigned, unsigned);
 
 static HMODULE g_module;
 static int g_ready;
@@ -53,6 +61,27 @@ static scene_fn p_begin_scene;
 static scene_fn p_end_scene;
 static viewport_fn p_viewport;
 static render_target_fn p_render_target;
+static offset_fn p_set_guest_offset;
+static transform_fn p_transform;
+static draw_up_fn p_draw_up;
+static draw_indexed_up_fn p_draw_indexed_up;
+static readback_fn p_readback;
+static vertex_shader_fn p_begin;
+static scene_fn p_end;
+static vertex2_fn p_vertex2f;
+static vertex4_fn p_vertex4f;
+static pair_fn p_vertex_color;
+static pair_fn p_load_vertex_shader;
+static pair_fn p_select_vertex_shader;
+static int g_host_ready;
+static __declspec(thread) int g_guest_only;
+
+extern void sub_003BB4C0(void);
+extern void sub_003B86E0(void);
+extern void xbox_FramebufferWindowSet(uint32_t, uint32_t);
+extern void xbox_FramebufferWindowPresent(uint32_t, uint32_t);
+extern void xbox_FramebufferWindowSetAA(uint32_t);
+extern void xbox_FramebufferWindowStart(void);
 
 static int load_dll(void)
 {
@@ -90,6 +119,18 @@ static int load_dll(void)
     LOAD(end_scene, scene_fn);
     LOAD(viewport, viewport_fn);
     LOAD(render_target, render_target_fn);
+    LOAD(set_guest_offset, offset_fn);
+    LOAD(transform, transform_fn);
+    LOAD(draw_up, draw_up_fn);
+    LOAD(draw_indexed_up, draw_indexed_up_fn);
+    LOAD(readback, readback_fn);
+    LOAD(begin, vertex_shader_fn);
+    LOAD(end, scene_fn);
+    LOAD(vertex2f, vertex2_fn);
+    LOAD(vertex4f, vertex4_fn);
+    LOAD(vertex_color, pair_fn);
+    LOAD(load_vertex_shader, pair_fn);
+    LOAD(select_vertex_shader, pair_fn);
 #undef LOAD
     g_ready = 1;
     return 1;
@@ -100,12 +141,15 @@ int noble_d3d8_init(void)
     fprintf(stderr, "[D3D8HLE] init: loading dll\n");
     if (!load_dll())
         return 0;
+    p_set_guest_offset(g_xbox_mem_offset);
     fprintf(stderr, "[D3D8HLE] init: calling host create\n");
     if (!p_init()) {
         fprintf(stderr, "[D3D8HLE] init: host create failed\n");
         return 0;
     }
     fprintf(stderr, "[D3D8HLE] init: ready\n");
+    g_host_ready = 1;
+    xbox_FramebufferWindowStart();
     return 1;
 }
 
@@ -114,193 +158,145 @@ static uint32_t arg(unsigned index)
     return MEM32(g_esp + 4 + index * 4);
 }
 
-static void log_call_once(uint32_t va, int slots)
+/* Keep guest shader handles separate from the host's private objects. */
+#define SHADER_SLOTS 512
+static struct { uint32_t guest, host; } g_shaders[SHADER_SLOTS];
+static unsigned g_shader_count;
+
+static unsigned host_shader(unsigned guest)
 {
-    static uint32_t seen[32];
-    static unsigned count;
     unsigned i;
-    uint32_t device = MEM32(0x003C6F98u);
-    for (i = 0; i < count; i++)
-        if (seen[i] == va)
-            return;
-    if (count >= 32)
-        return;
-    seen[count++] = va;
-    fprintf(stderr, "[D3D8DBG] %08X ret=%08X esp=%08X ecx=%08X edx=%08X",
-            va, MEM32(g_esp), g_esp, g_ecx, g_edx);
-    for (i = 0; i < (unsigned)slots; i++)
-        fprintf(stderr, " a%u=%08X", i, arg(i));
-    if (device)
-        fprintf(stderr, " dev=%08X bcc=%08X bd0=%08X c54=%08X",
-                device, MEM32(device + 0xBCC), MEM32(device + 0xBD0),
-                MEM32(device + 0xC54));
-    fputc('\n', stderr);
-}
-
-static void set_result(uint32_t value)
-{
-    g_eax = value;
-}
-
-static void handled(uint32_t cleanup)
-{
-    g_esp += cleanup;
+    if (!(guest & 1)) return guest;
+    for (i=0;i<g_shader_count;i++)
+        if (g_shaders[i].guest==guest) return g_shaders[i].host;
+    fprintf(stderr,"[D3D8HLE] unmapped guest vertex shader %08X\n",guest);
+    return 0;
 }
 
 int noble_d3d8_guest_call(uint32_t va, uint32_t cleanup)
 {
     static int enabled = -1;
-    static int hle_active;
-    static DWORD hle_start;
+    uint32_t device;
     if (enabled < 0) {
-        const char *value = getenv("RECOMP_D3D8GL");
-        enabled = value && *value && strcmp(value, "0") ? 1 : 0;
+        const char *value=getenv("RECOMP_D3D8GL");
+        enabled=value && *value && strcmp(value,"0");
     }
-    if (!enabled)
-        return 0;
+    if (!enabled || g_guest_only) return 0;
 
-
-    static uint32_t seen[64];
-    static unsigned seen_count;
-    unsigned i;
-
-    if (!load_dll())
-        return 0;
-
-    /* Device initialization calls many of these entry points before the first
-     * frame.  Leave the guest implementation in charge until a clear marks the
-     * frame boundary; from then on the host device consumes state. */
-    if (!hle_start)
-        hle_start = GetTickCount();
-    if (!hle_active && GetTickCount() - hle_start > 10000)
-        hle_active = 1;
-    if (!hle_active && va != 0x003B66D0u && va != 0x003B6FB0u)
-        return 0;
-
-    for (i = 0; i < seen_count; i++)
-        if (seen[i] == va)
-            break;
-    if (i == seen_count && seen_count < 64) {
-        seen[seen_count++] = va;
-        fprintf(stderr, "[D3D8HLE] first call %08X\n", va);
-    }
-
-    switch (va) {
-    case 0x003B66D0u: { /* Clear(count, rects, flags, color, z, stencil) */
-        uint32_t z_bits = arg(4);
-        float z;
-        fprintf(stderr, "[D3D8HLE] clear: ensure host\n");
-        if (!p_init())
-            return 0;
-        memcpy(&z, &z_bits, sizeof(z));
-        p_clear(arg(0), arg(1), arg(2), arg(3), z, arg(5));
-        set_result(0);
-        handled(cleanup);
-        return 1;
-    }
-
-    case 0x003B6FB0u: /* Present */
-        p_present();
-        set_result(0);
-        handled(cleanup);
-        return 1;
-
-    case 0x003B6520u: /* BeginScene / frame separator */
-        set_result(0);
-        handled(cleanup);
-        return 1;
-
-    case 0x003B7820u: /* SetTexture(stage, texture) */
-        p_texture(arg(0), arg(1));
-        set_result(0);
-        handled(cleanup);
-        return 1;
-
-    case 0x003B79D0u: /* SetPalette(stage, palette) */
-        p_palette(arg(0), arg(1));
-        set_result(0);
-        handled(cleanup);
-        return 1;
-
-    case 0x003B8820u: /* SetVertexShaderConstant(reg, data, 1) */
-        p_vertex_constants((int)g_ecx, g_edx, 1);
-        set_result(0);
-        handled(cleanup);
-        return 1;
-
-    case 0x003B8880u: /* SetVertexShaderConstant(reg, data, 4) */
-        p_vertex_constants((int)g_ecx, g_edx, 4);
-        set_result(0);
-        handled(cleanup);
-        return 1;
-
-    case 0x003B7B60u: { /* SetStreamSource(stream, vertex_buffer) */
-        uint32_t vb = arg(1);
-        log_call_once(0x003B7B60u, 2);
-        return 0;
-    }
-
-    case 0x003B86E0u: { /* CreateVertexShader(declaration, function, handle, usage) */
-        uint32_t handle = 0;
-        log_call_once(0x003B86E0u, 4);
-        uint32_t out = arg(2);
-        handle = p_create_vertex_shader(arg(0), arg(1), arg(3));
-        if (out)
-            MEM32(out) = handle;
-        set_result(0);
-        handled(cleanup);
-        return 1;
-    }
-
-    case 0x003B8E30u: /* SetVertexShader(handle) */
-        p_vertex_shader(arg(0));
-        set_result(0);
-        handled(cleanup);
-        return 1;
-
-    case 0x003BAE20u: /* SetPixelShaderProgram */
-        p_pixel_shader(arg(0));
-        set_result(0);
-        handled(cleanup);
-        return 1;
-
-    case 0x003BA740u: { /* log the first draws and leave the guest path */
-        static unsigned draw_logs;
-        uint32_t device = MEM32(0x003C6F98u);
-        uint32_t a0 = arg(0), a1 = arg(1), a2 = arg(2), a3 = arg(3);
-        if (draw_logs < 12) {
-            unsigned st;
-            draw_logs++;
-            fprintf(stderr, "[D3D8DRAW] t=%lu esp=%08X a=%08X,%08X,%08X,%08X dev=%08X",
-                    (unsigned long)GetTickCount(), g_esp, a0, a1, a2, a3, device);
-            for (st = 0; st < 4; st++) {
-                uint32_t e = device + 0x1AC0 + st * 24;
-                fprintf(stderr, " s%u=%08X/%08X/%08X/%08X/%08X/%08X", st,
-                        MEM32(e), MEM32(e + 4), MEM32(e + 8), MEM32(e + 12),
-                        MEM32(e + 16), MEM32(e + 20));
-            }
-            if (a2)
-                fprintf(stderr, " vb=%08X/%08X/%08X/%08X/%08X/%08X",
-                        MEM32(a2), MEM32(a2 + 4), MEM32(a2 + 8),
-                        MEM32(a2 + 12), MEM32(a2 + 16), MEM32(a2 + 20));
-            fputc('\n', stderr);
+    if (va==0x003BB4C0u) {
+        /* Initialize fully before claiming any rendering work. Reentry runs
+         * the original guest implementation with interception disabled. */
+        g_guest_only=1;
+        sub_003BB4C0();
+        g_guest_only=0;
+        if ((int32_t)g_eax>=0 && MEM32(0x003C6F98u) && noble_d3d8_init()) {
+            device=MEM32(0x003C6F98u);
+            p_render_target(MEM32(device+0x1A04),MEM32(device+0x1A08));
+            p_viewport(device+0xEE0);
+            p_vertex_shader(host_shader(MEM32(device+0x798)));
+            fprintf(stderr,"[D3D8HLE] guest device ready; deterministic handoff\n");
         }
-        return 0;
+        return 1; /* Guest already cleaned its own stack. */
+    }
+    if (!g_host_ready) return 0;
+    device=MEM32(0x003C6F98u);
+    if (!device) return 0;
+    /* Loading a guest vertex program can unpack embedded constants directly
+     * into this shadow array without calling any constant API entry point. */
+    if (va==0x003BA740u || va==0x003BA8B0u || va==0x003BA9F0u || va==0x003BAD40u) {
+        p_vertex_constants(-96,0x003C5EE0u,192);
+        p_viewport(device+0xEE0); /* Recompute the reserved viewport constants. */
+    }
+    {
+        static uint32_t seen[32];
+        static unsigned count;
+        unsigned i;
+        for (i=0;i<count && seen[i]!=va;i++) {}
+        if (i==count && count<32) {
+            seen[count++]=va;
+            fprintf(stderr,"[D3D8HLE] entry=%08X args=%08X,%08X,%08X,%08X ecx=%08X edx=%08X shader=%08X maps=%u\n",
+                    va,arg(0),arg(1),arg(2),arg(3),g_ecx,g_edx,
+                    MEM32(device+0x798),g_shader_count);
+        }
     }
 
-    case 0x003B8FD0u: /* simple render state: the game updated the guest array */
-        set_result(0);
-        handled(cleanup);
+    /* Mirror setters, then let the guest maintain references and shadow data.
+     * Only complete draw/clear operations are suppressed. */
+    switch (va) {
+    case 0x003B6520u: { /* Swap(flags), NOT SetRenderTarget. */
+        static unsigned trace_swaps;
+        uint32_t surface=MEM32(device+0x1A04);
+        int readback=p_readback(surface);
+        if (trace_swaps++<3)
+            fprintf(stderr,"[D3D8HLE] swap surface=%08X data=%08X format=%08X size=%08X readback=%d\n",
+                    surface,MEM32(surface+4),MEM32(surface+12),MEM32(surface+16),readback);
+        if (readback) {
+            uint32_t data=MEM32(surface+4), size=MEM32(surface+16);
+            uint32_t pitch=((size>>24)+1)*64;
+            uint32_t width=(size&0xFFF)+1, height=((size>>12)&0xFFF)+1;
+            /* Without guest draws the executor has no drawn surface to
+             * publish. The guest Swap still supplies its usual flip stats. */
+            if (width==640 && height==480 && pitch==640*4) {
+                if (data<0x04000000) data|=0x80000000;
+                xbox_FramebufferWindowSet(data,pitch);
+                xbox_FramebufferWindowSetAA(1);
+                xbox_FramebufferWindowPresent(data,pitch);
+            }
+        }
+        p_present();
+        return 0; /* Guest buffer rotation, counter and pacing run once. */
+    }
+    case 0x003B6FB0u: p_render_target(arg(0),arg(1)); return 0;
+    case 0x003B75F0u: p_viewport(arg(0)); return 0;
+    case 0x003B6B80u: p_transform(arg(0),arg(1)); return 0;
+    case 0x003B7820u: p_texture(arg(0),arg(1)); return 0;
+    case 0x003B79D0u: p_palette(arg(0),arg(1)); return 0;
+    case 0x003B8A50u: p_stream(arg(0),arg(1),arg(2)); return 0;
+    case 0x003B7A60u: p_indices(arg(0),arg(1)); return 0;
+    case 0x003B8820u:
+        p_vertex_constants((int)g_ecx-96,g_edx,1); return 0;
+    case 0x003B8880u:
+        p_vertex_constants((int)g_ecx-96,g_edx,4); return 0;
+    case 0x003B8930u:
+        if (!(arg(0)&3)) p_vertex_constants((int)g_ecx-96,g_edx,arg(0)/4);
+        return 0;
+    case 0x003B86E0u: {
+        uint32_t declaration=arg(0),function=arg(1),out=arg(2),usage=arg(3);
+        uint32_t host=p_create_vertex_shader(declaration,function,usage);
+        g_guest_only=1;
+        sub_003B86E0();
+        g_guest_only=0;
+        if ((int32_t)g_eax>=0 && out && host && g_shader_count<SHADER_SLOTS) {
+            g_shaders[g_shader_count].guest=MEM32(out);
+            g_shaders[g_shader_count++].host=host;
+        }
         return 1;
-
-    default:
-        return 0;
     }
+    case 0x003B8E30u: p_vertex_shader(host_shader(arg(0))); return 0;
+    case 0x003B8AE0u: p_load_vertex_shader(host_shader(arg(0)),arg(1)); return 0;
+    case 0x003B8B40u: p_select_vertex_shader(host_shader(arg(0)),arg(1)); return 0;
+    case 0x003BAE20u: p_pixel_shader(arg(0)); return 0;
+    case 0x003B66D0u: {
+        uint32_t bits=arg(4);
+        float z;
+        memcpy(&z,&bits,sizeof z);
+        p_clear(arg(0),arg(1),arg(2),arg(3),z,arg(5));
+        break;
+    }
+    case 0x003BA740u: p_draw_up(arg(0),arg(1),arg(2),arg(3)); break;
+    case 0x003BA8B0u: p_draw_indexed_up(arg(0),arg(1),arg(2),arg(3),arg(4)); break;
+    case 0x003BA9F0u: p_draw_indexed(arg(0),arg(1),arg(2)); break;
+    case 0x003BAD40u: p_begin(arg(0)); return 0; /* Guest Begin/End maintain device flags. */
+    case 0x003BAD80u: p_end(); return 0;
+    case 0x003BAC50u: p_vertex2f(arg(0),arg(1),arg(2)); break;
+    case 0x003BAC90u: p_vertex4f(arg(0),arg(1),arg(2),arg(3),arg(4)); break;
+    case 0x003BACF0u: p_vertex_color(arg(0),arg(1)); break;
+    default: return 0; /* Includes SetTile and raw method emission. */
+    }
+    g_eax=0;
+    g_esp+=cleanup;
+    return 1;
 }
-
-
-
-
 
 /*
  * The guest D3D8 GetDisplayFieldStatus.  The XMV decoder waits for an odd

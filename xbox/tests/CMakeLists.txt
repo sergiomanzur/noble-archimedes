@@ -47,6 +47,14 @@ if(MSVC)
 endif()
 add_test(NAME xmv-clock COMMAND xmv_clock_test)
 
+add_executable(d3d8_hle_abi_test d3d8_hle_abi_test.c)
+target_include_directories(d3d8_hle_abi_test PRIVATE
+    ../../tools/xboxrecomp/templates/runtime ../src)
+add_test(NAME d3d8-hle-abi COMMAND d3d8_hle_abi_test)
+add_test(NAME d3d8-generated-hooks
+    COMMAND ${Python3_EXECUTABLE} -m unittest discover -s ${CMAKE_CURRENT_SOURCE_DIR}
+        -p test_d3d8_hooks.py)
+
 add_executable(gpu_blend_state_test gpu_blend_state_test.c)
 target_include_directories(gpu_blend_state_test PRIVATE ../../tools/xboxrecomp/src)
 target_compile_definitions(gpu_blend_state_test PRIVATE _CRT_SECURE_NO_WARNINGS)

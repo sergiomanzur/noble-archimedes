@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import re
+import shutil
 import statistics
 import time
 from pathlib import Path
@@ -39,7 +40,17 @@ def flip_at(ms: float, points: list[tuple[float, int]]) -> int:
 
 
 def calibration_points(samples) -> list[tuple[float, int]]:
-    return [(s.ms, s.flip) for s in samples if s.flip]
+    points = [(s.ms, s.flip) for s in samples if s.flip]
+    if len(points) < 2 or any(
+            m1 <= m0 or f1 <= f0
+            for (m0, f0), (m1, f1) in zip(points, points[1:])):
+        raise ValueError("calibration needs at least two increasing frame timestamps")
+    required_start = min(s0 for _, s0, _ in bench.MAIN_SCENES)
+    required_end = max(s1 for _, _, s1 in bench.MAIN_SCENES)
+    if points[0][0] > required_start or points[-1][0] < required_end:
+        raise ValueError(f"calibration must cover scene timestamps "
+                         f"{required_start}-{required_end} ms")
+    return points
 
 
 def make_frame_script(pad: str, points) -> tuple[str, dict[str, int]]:
@@ -94,28 +105,47 @@ def main() -> int:
     ap.add_argument("--runs", type=int, default=3)
     ap.add_argument("--duration", type=int, default=0)
     ap.add_argument("--update-baseline", action="store_true")
-    ap.add_argument("--skip-calibration", action="store_true")
+    ap.add_argument("--backend", choices=bench.BACKENDS, default="software")
+    ap.add_argument("--calibration", type=Path,
+                    help="reuse an existing calibration xbox_stderr.log across backends")
+    ap.add_argument("--skip-calibration", action="store_true",
+                    help="reuse --calibration (requires an explicit existing log)")
+    ap.add_argument("--gpu-present", action="store_true",
+                    help="enable RECOMP_GPU_PRESENT for the D3D11 backend")
     a = ap.parse_args()
+    if a.gpu_present and a.backend != "d3d11":
+        ap.error("--gpu-present requires --backend d3d11")
+    if a.skip_calibration and a.calibration is None:
+        ap.error("--skip-calibration requires --calibration PATH")
+    points = None
+    if a.calibration is not None:
+        try:
+            points = calibration_points(bench.parse_log(a.calibration))
+        except (OSError, ValueError) as exc:
+            ap.error(f"invalid calibration {a.calibration}: {exc}")
     if not bench.EXE_DEFAULT.exists():
         print("missing executable")
         return 2
     stamp = time.strftime("%Y%m%d_%H%M%S")
-    pdir = OUT / stamp
+    pdir = OUT / f"{stamp}_{a.backend}"
     pdir.mkdir(parents=True, exist_ok=True)
     print(f"host: {bench.host_info()}")
     print(f"frame-exact benchmark: {pdir}")
     duration = a.duration or bench.MAIN_DURATION
 
     cal_log = pdir / "calibration" / "xbox_stderr.log"
-    if a.skip_calibration and cal_log.exists():
-        cal_samples = bench.parse_log(cal_log)
+    if a.calibration is not None:
+        cal_log.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(a.calibration, cal_log)
     else:
         print("[calibration] wall-clock pad timeline")
         bench.run_one(bench.EXE_DEFAULT, pdir / "calibration", bench.MAIN_PAD,
-                      duration, "software", False, no_unique=True,
+                      bench.MAIN_DURATION, "software", False, no_unique=True,
                       no_gpu_stats=True)
-        cal_samples = bench.parse_log(cal_log)
-    points = calibration_points(cal_samples)
+        try:
+            points = calibration_points(bench.parse_log(cal_log))
+        except (OSError, ValueError) as exc:
+            ap.error(f"invalid calibration {cal_log}: {exc}")
     print(f"[calibration] {len(points)} frame-timestamped samples")
     frame_pad, _ = make_frame_script(bench.MAIN_PAD, points)
     (pdir / "frame_pad.txt").write_text(frame_pad, encoding="ascii")
@@ -131,9 +161,10 @@ def main() -> int:
     for run in range(1, a.runs + 1):
         rdir = pdir / f"run{run}"
         print(f"[run {run}/{a.runs}] {rdir}")
-        bench.run_one(bench.EXE_DEFAULT, rdir, frame_pad, duration, "software",
+        bench.run_one(bench.EXE_DEFAULT, rdir, frame_pad, duration, a.backend,
                       False, no_unique=False, no_gpu_stats=False,
-                      capture_flips=capture, pad_frames=True)
+                      capture_flips=capture, pad_frames=True,
+                      gpu_present=a.gpu_present)
         # Rename actual-present captures to the names compare_baseline expects.
         shots = []
         for name, fa, fb, mid in scene_flips:

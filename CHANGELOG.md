@@ -1,5 +1,19 @@
 # Changelog
 
+## Xbox 60 FPS M1 direct-present prototype - failed, reverted (2026-10-19)
+
+- Prototyped a D3D11 swap chain on the existing framebuffer HWND with
+  `RECOMP_GPU_PRESENT=1`: no per-queue readback, CopyResource to the back
+  buffer, Present(0,0), and GDI painting disabled.
+- Measured: title 43, menu 34, cutscene 57, courtyard 14, pause 20,
+  courtyard-heavy 17, post-movement 19 fps. Captures differed from the software
+  baseline by 76-99%; the target still lacks CPU 2D/HUD composition and the
+  per-queue executor/unsupported paths.
+- It did not beat software in any 3D scene and was visually wrong. The code was
+  reverted; the harness `--gpu-present` switch remains only as a reproduction
+  hook. M1 needs the surface-ownership/composition work before direct present
+  can be enabled.
+
 ## Xbox 60 FPS Step 2 complete - frame-exact validation (2026-10-19)
 
 - Added `xbox/tools/frame_bench.py`: a calibration run maps wall-clock pad

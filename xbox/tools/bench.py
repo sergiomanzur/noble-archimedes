@@ -4,7 +4,7 @@
 Runs the recompiled title through a scripted controller timeline, samples the
 host's own PACE/GPU counters, checks that presented frames are unique, and
 captures a reference frame per scene.  The default path is the software
-rasteriser; pass --d3d11 or --d3d12 only to compare an opt-in backend.
+rasteriser; pass --backend d3d8gl, d3d11, or d3d12 to compare an opt-in backend.
 
 Examples:
     python xbox/tools/bench.py --runs 1
@@ -36,6 +36,7 @@ BENCH = ROOT / "xbox" / "bench"
 OUT = BENCH / "out"
 BASE = BENCH / "baselines"
 EXE_DEFAULT = ROOT / "xbox" / "build" / "Release" / "curse_of_darkness_xbox_recomp.exe"
+BACKENDS = ("software", "d3d8gl", "d3d11", "d3d12")
 
 # Timings are milliseconds from the first PACE report.  The title reaches the
 # menu around 15 s, the in-engine prologue around 25 s, and the courtyard
@@ -262,7 +263,11 @@ def run_one(exe: Path, out: Path, pad_text: str, duration: int,
             backend: str, update_baseline: bool, no_unique: bool = False,
             no_gpu_stats: bool = False, no_p8_cache: bool = False,
             capture_flips: str = "", pad_frames: bool = False,
-            gpu_present: bool = False) -> list[Path]:
+            gpu_present: bool = False, d3d8gl: bool = False) -> list[Path]:
+    if backend not in BACKENDS:
+        raise ValueError(f"unknown backend: {backend}")
+    if gpu_present and backend != "d3d11":
+        raise ValueError("gpu_present requires the d3d11 backend")
     out.mkdir(parents=True, exist_ok=True)
     (out / "pad_script.txt").write_text(pad_text, encoding="ascii")
     for f in ("xbox_stdout.log", "xbox_stderr.log", "xbox_kernel.log"):
@@ -291,12 +296,16 @@ def run_one(exe: Path, out: Path, pad_text: str, duration: int,
         env["RECOMP_CAPTURE_DIR"] = str(out)
     if pad_frames:
         env["RECOMP_PAD_FRAMES"] = "1"
-    if backend == "d3d11":
+    if backend == "d3d8gl":
+        env["RECOMP_D3D8GL"] = "1"
+    elif backend == "d3d11":
         env["RECOMP_GPU_RASTER"] = "1"
-    if gpu_present:
-        env["RECOMP_GPU_PRESENT"] = "1"
     elif backend == "d3d12":
         env["RECOMP_GPU_D3D12"] = "1"
+    if gpu_present:
+        env["RECOMP_GPU_PRESENT"] = "1"
+    if d3d8gl:
+        env["RECOMP_D3D8GL"] = "1"
     st = subprocess.STARTUPINFO()
     st.dwFlags = subprocess.STARTF_USESHOWWINDOW
     st.wShowWindow = 0
@@ -346,9 +355,12 @@ def compare_baseline(shots: list[Path], update: bool) -> list[str]:
     for shot in shots:
         name = shot.stem.removeprefix("capture_")
         base = BASE / f"{name}.bmp"
-        if update or not base.exists():
+        if update:
             shutil.copy2(shot, base)
             notes.append(f"{name}: baseline written")
+            continue
+        if not base.exists():
+            notes.append(f"{name}: baseline missing; use --update-baseline to write")
             continue
         try:
             a = Image.open(base).convert("RGB")
@@ -390,7 +402,7 @@ def main() -> int:
     ap.add_argument("--duration", type=int, default=0,
                     help="override run length in seconds")
     ap.add_argument("--profile", choices=("main", "movie", "both"), default="main")
-    ap.add_argument("--backend", choices=("software", "d3d11", "d3d12"),
+    ap.add_argument("--backend", choices=BACKENDS,
                     default="software")
     ap.add_argument("--exe", type=Path, default=EXE_DEFAULT)
     ap.add_argument("--update-baseline", action="store_true")
@@ -404,7 +416,11 @@ def main() -> int:
                     help="comma-separated presented flip numbers to capture")
     ap.add_argument("--gpu-present", action="store_true",
                     help="enable RECOMP_GPU_PRESENT for the D3D11 backend")
+    ap.add_argument("--d3d8gl", action="store_true",
+                    help="enable the device-level D3D8 OpenGL HLE")
     a = ap.parse_args()
+    if a.gpu_present and a.backend != "d3d11":
+        ap.error("--gpu-present requires --backend d3d11")
     if not a.exe.exists():
         print(f"missing executable: {a.exe}", file=sys.stderr)
         return 2
@@ -425,7 +441,7 @@ def main() -> int:
             print(f"\n[{profile} run {run}/{a.runs}] {rdir}")
             shots = run_one(a.exe, rdir, pad, duration, a.backend, a.update_baseline,
                             a.no_unique, a.no_gpu_stats, a.no_p8_cache,
-                            a.capture_flips)
+                            a.capture_flips, gpu_present=a.gpu_present)
             notes = compare_baseline(shots, a.update_baseline)
             log = rdir / "xbox_stderr.log"
             samples = parse_log(log) if log.exists() else []

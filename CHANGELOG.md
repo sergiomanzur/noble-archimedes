@@ -1,5 +1,22 @@
 # Changelog
 
+## Xbox D3D8 HLE probe - faster but not visually correct (2026-10-20)
+
+- Ran the existing device-level HLE (`RECOMP_D3D8GL=1`, `--backend d3d8gl`)
+  through the 112 s bench.
+- The HLE is active and deterministic: CreateDevice hands off, SetStreamSource,
+  SetIndices, shader/state calls and draw `0x003BA740` are reached; the guest
+  pushbuffer draw work is suppressed.
+- Performance: title 54, cutscene 37, courtyard 40, pause 43.5, heavy 40,
+  post-movement 33 fps. This is faster than the 31 fps software path, but the
+  guest readback/captures are flat gray and differ from software by 87-100%.
+- The immediate blocker is the D3D8GL render-target/readback path: readback
+  reports `readback=1`, but the surface the framebuffer window gets is not the
+  GL target that was drawn. Do not make this path default until it presents the
+  actual GL image.
+- No D3D8GL source changes were made in this probe; `--backend d3d8gl` is a
+  reproduction switch in the harness.
+
 ## Xbox 60 FPS M1 surface-ownership attempt - failed, reverted (2026-10-20)
 
 - Tried the next M1 step: keep the D3D11 target resident, read back only when

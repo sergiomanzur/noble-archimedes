@@ -1,5 +1,20 @@
 # Changelog
 
+## Xbox 60 FPS Step 2 - frame-indexed capture (2026-10-19)
+
+- Added `xbox_FramebufferCapturePresented` which writes the actual published
+  present buffer at a requested presented flip. `RECOMP_CAPTURE_FLIPS` and
+  `RECOMP_CAPTURE_DIR` select exact frames; the harness exposes
+  `--capture-flips`. Verified on flips 60 and 120 (loading screen), independent
+  of wall-clock scheduling.
+- Added `usb_gamepad_set_flip_source`; `RECOMP_PAD_FRAMES=1` interprets pad
+  script times/holds as presented frames. The full calibrated frame timeline is
+  still to be wired into `bench.py`.
+- The pause scene's actual presented capture is a flat gray/torn buffer, not the
+  pause menu. This proves the pause/HUD ordering bug is in the presentation
+  path, not the screenshot copy. M1's display-buffer ownership must fix it.
+- No M1 renderer changes yet. Tests remain 19/19.
+
 ## Xbox 60 FPS pre-work checkpoint - 2026-10-19
 
 Safety: branches `xbox-60fps` were created in both repos before the rewrite.

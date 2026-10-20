@@ -1,5 +1,20 @@
 # Changelog
 
+## Xbox 60 FPS M1 surface-ownership attempt - failed, reverted (2026-10-20)
+
+- Tried the next M1 step: keep the D3D11 target resident, read back only when
+  a software batch is about to write guest memory, upload guest state again at
+  flip when CPU 2D has drawn, and present the D3D11 target through a swap chain
+  on the framebuffer HWND.
+- Measured: title 47, menu 41, cutscene 60, courtyard 16, pause 22,
+  courtyard-heavy 18, post-movement 20 fps. Captures still differed by 76-99%
+  from the software baseline.
+- The CPU 2D/HUD composition and the executor's CPU/GPU switching still force
+  enough transfer and queue work that direct present loses to software. The
+  prototype was reverted; the stable software path (and its 31 fps courtyard)
+  is unchanged. The `--gpu-present` harness switch remains only to reproduce
+  the failed experiment.
+
 ## Xbox 60 FPS M1 direct-present prototype - failed, reverted (2026-10-19)
 
 - Prototyped a D3D11 swap chain on the existing framebuffer HWND with

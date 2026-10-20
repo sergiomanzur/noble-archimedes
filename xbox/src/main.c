@@ -389,6 +389,15 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
     g_xbox_mem_offset = xbox_GetMemoryOffset();
     printf("Xbox memory mapped. Offset: 0x%llX\n", (unsigned long long)g_xbox_mem_offset);
 
+    {
+        /* Frame-numbered pad schedules and captured flips use the same clock
+         * as the presented window.  The USB module takes a callback so it
+         * remains usable without the video library. */
+        extern uint32_t xbox_FramebufferFlipCount(void);
+        extern void usb_gamepad_set_flip_source(unsigned long (*fn)(void));
+        usb_gamepad_set_flip_source((unsigned long (*)(void))xbox_FramebufferFlipCount);
+    }
+
     /* Bring up the emulated APU.
      *
      * Gated on the same variable that unmaps its registers, because the two

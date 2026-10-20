@@ -253,7 +253,8 @@ def find_window(pid: int):
 
 def run_one(exe: Path, out: Path, pad_text: str, duration: int,
             backend: str, update_baseline: bool, no_unique: bool = False,
-            no_gpu_stats: bool = False, no_p8_cache: bool = False) -> list[Path]:
+            no_gpu_stats: bool = False, no_p8_cache: bool = False,
+            capture_flips: str = "") -> list[Path]:
     out.mkdir(parents=True, exist_ok=True)
     (out / "pad_script.txt").write_text(pad_text, encoding="ascii")
     for f in ("xbox_stdout.log", "xbox_stderr.log", "xbox_kernel.log"):
@@ -277,6 +278,9 @@ def run_one(exe: Path, out: Path, pad_text: str, duration: int,
         env["RECOMP_GPU_STATS"] = "1"
     if no_p8_cache:
         env["RECOMP_NO_P8_CACHE"] = "1"
+    if capture_flips:
+        env["RECOMP_CAPTURE_FLIPS"] = capture_flips
+        env["RECOMP_CAPTURE_DIR"] = str(out)
     if backend == "d3d11":
         env["RECOMP_GPU_RASTER"] = "1"
     elif backend == "d3d12":
@@ -384,6 +388,8 @@ def main() -> int:
                     help="disable per-second GPU/P8 reports")
     ap.add_argument("--no-p8-cache", action="store_true",
                     help="disable the P8 RGBA cache for comparison")
+    ap.add_argument("--capture-flips", default="",
+                    help="comma-separated presented flip numbers to capture")
     a = ap.parse_args()
     if not a.exe.exists():
         print(f"missing executable: {a.exe}", file=sys.stderr)
@@ -404,7 +410,8 @@ def main() -> int:
             rdir = pdir / f"run{run}"
             print(f"\n[{profile} run {run}/{a.runs}] {rdir}")
             shots = run_one(a.exe, rdir, pad, duration, a.backend, a.update_baseline,
-                            a.no_unique, a.no_gpu_stats, a.no_p8_cache)
+                            a.no_unique, a.no_gpu_stats, a.no_p8_cache,
+                            a.capture_flips)
             notes = compare_baseline(shots, a.update_baseline)
             log = rdir / "xbox_stderr.log"
             samples = parse_log(log) if log.exists() else []

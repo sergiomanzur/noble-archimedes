@@ -1,5 +1,17 @@
 # Changelog
 
+## D3D8GL draw-target follow-up (2026-10-20)
+
+- Switched Swap readback from the front surface's render-target entry to
+  `device.render_target`, the actual GL draw target, then copied that into the
+  front guest surface. This removed the remaining target-selection ambiguity.
+- The dump is still entirely black, with `err=0`; the standalone
+  `d3d8gl --gpu-test` FVF/indexed/readback test still passes. The remaining
+  fault is therefore in the HLE-fed programmable/UP draw state, not in
+  `glReadPixels`, the front-surface copy, or the GL device itself.
+- HLE performance remains ~40 fps in the courtyard but is not visually valid;
+  software remains the default.
+
 ## D3D8GL readback diagnosis (2026-10-20)
 
 - Added `RECOMP_D3D8GL_DUMP_READBACK` diagnostics to the GL readback path.

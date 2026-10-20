@@ -1,5 +1,41 @@
 # Changelog
 
+## Xbox 60 FPS pre-work checkpoint - 2026-10-19
+
+Safety: branches `xbox-60fps` were created in both repos before the rewrite.
+Snapshots are `2e447d3` (main) and `7fa2214` (tools/xboxrecomp); the harness
+switch commit is `ee01aca`.
+
+- **P8 regression found and fixed.** `[P8]` reported ~900 hits/s, 42
+  rebuilds/s and ~47 MB/s of full-image comparison; the recolour cache cost
+  6-14 ms/frame. HUD/menu quads are small and palette-animated, the worst case
+  for that cache. `prepare_p8_draw_textures` now samples the palette per texel
+  for `NV_PRIM_QUADS` and keeps the cached RGBA path for large 3D atlases.
+  Commit `281fd0d`. `RECOMP_P8_UI_CACHE=1` restores the old path.
+- Three-run software result after the fix: title **59.0**, main menu **40.0**,
+  cutscene **57.0**, courtyard-light **31.5**, pause **53.0**, courtyard-heavy
+  **30.5**, post-movement courtyard **32.0** fps. P8 is 0.8-1.0 ms/frame.
+  Title unique/present is 97%; the 3D scenes are 99-100%.
+- **Harness overhead is not the explanation** for the earlier title drop:
+  `--no-unique --no-gpu-stats` produced the same 54/34/26 before the P8 fix.
+- **Critical path:** the 0.98-core thread is a raster worker; its ntdll samples
+  are event waits for the next pool job, not a mutex. Main/guest was 0.56 core
+  and the twelve workers ~0.5 each. The serial P8 recolour was the removable
+  main-thread cost; the remaining 3D limit is xform + raster (~20 ms/frame).
+- **Main menu remains 40 fps with 59.6% unique** even though P8 is 0.00 ms and
+  the harness is off. Title is 59/97% on the same build; this is a guest-side
+  menu cadence/present interval rather than renderer budget and needs a frame
+  trace.
+- **Guest clock is slow** (667-952 ms/s). KeTickCount is published from the
+  NV2A ack thread's `Sleep(0)` loop and loses the scheduler to the raster pool.
+  A high-priority ack thread fixed the clock but starved 2D (title 25 fps) and
+  was reverted. This is a kernel ticker scheduling bug; the game's own logic
+  frame counter is still not located.
+- **Visual validation is not trusted yet.** The pause capture is flat gray
+  (the pause overlay is not captured by the framebuffer path), and inputs are
+  still wall-clock scheduled. Frame-exact capture/input and an on-demand GPU
+  readback capture are the next step before M1.
+
 ## Xbox benchmark harness and Phase 0/1 analysis - 2026-10-19
 
 - Added `xbox/tools/bench.py`, a scripted, repeatable per-scene benchmark.

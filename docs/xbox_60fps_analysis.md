@@ -39,31 +39,30 @@ Reference screenshots are written to `xbox/bench/out/.../capture_*.bmp`.
 directories are gitignored. A baseline comparison is a per-pixel difference
 with an 8-count channel threshold.
 
-### 3-run result (software, default)
+### 3-run result after P8 UI caching fix (software, default)
 
 | scene | median fps | 1% low | unique fps | unique/present | draw | p8 | xform | raster | share | wait | setup | guest ms/s |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| title | 54.0 | 53.0 | 52.4 | 98.1% | 10.83 | 9.45 | 0.03 | 1.34 | 7.69 | 0.92 | 0.00 | 662 |
-| main_menu | 34.0 | 34.0 | 16.4 | 51.0% | 0.08 | 0.07 | 0.00 | 0.01 | 5.18 | 0.68 | 0.00 | 677 |
-| cutscene | 50.0 | 49.0 | 37.9 | 74.7% | 0.08 | 0.06 | 0.00 | 0.01 | 4.88 | 0.59 | 0.00 | 928 |
-| courtyard_light | 26.0 | 24.5 | 23.7 | 100.0% | 19.66 | 6.33 | 9.41 | 13.31 | 14.03 | 1.38 | 0.00 | 849 |
-| pause | 43.5 | 42.5 | 43.8 | 100.0% | 16.38 | 14.29 | 0.51 | 2.12 | 9.78 | 1.50 | 0.00 | 877 |
-| courtyard_heavy | 26.0 | 24.0 | 25.8 | 100.0% | 24.70 | 11.38 | 9.52 | 13.44 | 13.13 | 0.96 | 0.00 | 927 |
-| combat | 27.0 | 25.0 | 27.0 | 100.0% | 26.40 | 13.69 | 8.99 | 12.81 | 13.66 | 1.10 | 0.00 | 899 |
+| title | 59.0 | 59.0 | 56.7 | 97.2% | 1.19 | 0.01 | 0.03 | 1.18 | 8.10 | 0.72 | 0.00 | 667 |
+| main_menu | 40.0 | 40.0 | 22.7 | 59.6% | 0.01 | 0.00 | 0.00 | 0.01 | 3.76 | 0.39 | 0.00 | 667 |
+| cutscene | 57.0 | 56.0 | 39.7 | 70.0% | 0.01 | 0.00 | 0.00 | 0.01 | 4.07 | 0.32 | 0.00 | 923 |
+| courtyard_light | 31.5 | 30.5 | 29.9 | 98.9% | 13.40 | 1.00 | 8.38 | 12.04 | 12.22 | 0.70 | 0.00 | 841 |
+| pause | 53.0 | 52.0 | 52.5 | 100.0% | 2.04 | 0.02 | 0.48 | 2.04 | 11.40 | 2.63 | 0.00 | 877 |
+| courtyard_heavy | 30.5 | 30.0 | 30.0 | 100.0% | 12.91 | 0.80 | 8.21 | 12.10 | 12.58 | 0.65 | 0.00 | 923 |
+| combat | 32.0 | 31.5 | 31.9 | 100.0% | 12.38 | 0.91 | 7.71 | 11.46 | 11.86 | 0.67 | 0.00 | 952 |
 
 The run-to-run spread is within 1-2 fps for the stable 3D scenes. The title,
 cutscene and menu are UI/transition scenes and are not 3D targets.
 
 ### Scene caveats
 
-- `main_menu` is the *static* title menu. It presents 34 flips/s and only 51%
-  of those are unique images. The guest menu loop appears to be capped or
-  blocked independently of host pacing; a static screen cannot be used as the
-  60-unique-frame proof.
-- `pause` opens the game's pause state (PACE rises to 43-46 fps and the HUD
-  disappears), but the framebuffer window retains the 3D background. The pause
-  overlay is not captured by `RECOMP_FB_WINDOW`; the baseline is not a pause
-  screenshot. The old `output/m-cpu-skip/frame_00005.png` shows the intended
+- `main_menu` is the *static* title menu. After the P8 fix it presents 40
+  flips/s and 59.6% unique images. The title itself is 59 fps and 97% unique;
+  the menu cadence is a separate guest-side issue (see pre-work findings).
+- `pause` now measures 53 fps (after the P8 fix), but the framebuffer window
+  captures a flat gray/torn buffer rather than the pause overlay. The capture
+  path is still wrong; the old `output/m-cpu-skip/frame_00005.png` shows the
+  intended panel. The old `output/m-cpu-skip/frame_00005.png` shows the intended
   pause/status panel. This is an open presentation-ordering bug.
 - `courtyard_heavy` and `combat` are the same first courtyard after forward
   movement; no enemies or Innocent Devil were reached. The requested later
@@ -147,3 +146,13 @@ the user's approval before implementation.
 `ctest --test-dir xbox/build-tests -C Release`: **19/19 pass** in the current
 tree (18 prior tests plus `bench-harness`). The harness test covers parsing and
 scene-window invariants.
+
+## Safety snapshot
+
+Branches and commits before Track A:
+
+- main repo `xbox-60fps`: `2e447d3` (snapshot), `ee01aca` (bench switches).
+- `tools/xboxrecomp` `xbox-60fps`: `7fa2214` (snapshot), `281fd0d` (P8 UI fix).
+
+No assets, generated code, `extracted/`, or bench outputs were committed.
+

@@ -1,5 +1,36 @@
 # Changelog
 
+## D3D8 HLE async swap readback and true-backend benchmark (2026-10-21)
+
+- Swap readback now uses a two-entry PBO ring: the previous frame is mapped
+  and copied after the next frame has been submitted, instead of calling
+  `glReadPixels` synchronously into guest memory.  Measured readback cost fell
+  from ~4.0 ms to ~0.5 ms/frame; the guest image is one frame behind, which is
+  invisible at 50+ fps and no longer stalls the GPU at Swap.
+- Added `frame_bench.py --calibrate-backend`.  The default remains software
+  calibration (the existing regression test requires it); HLE validation can
+  now calibrate against its own frame timeline.  With software calibration,
+  the HLE run's scene windows were silently sampling the wrong game states.
+- True HLE-calibrated run with the 10 ms DSP settle intact:
+
+  | scene | fps | unique/present | guest ms/s |
+  |---|---:|---:|---:|
+  | courtyard_light | 49.0 | 99.4% | 1000 |
+  | pause | 51.0 | 99.8% | 1000 |
+  | courtyard_heavy | 47.0 | 100.0% | 1001 |
+  | combat | 45.0 | 100.0% | 1000 |
+
+  The pause panel and courtyard/combat images are correct; unique frame ratios
+  are effectively 100%, so these are not duplicated presented frames.
+- Reducing or removing the DSP settle was tested and rejected.  A 5 ms settle
+  presents 60 fps but the renderer still produces only ~51 unique frames/s;
+  a 0 ms settle and a forced DSP-complete flag both stall the movie/prologue
+  state machine.  The 10 ms wait is part of the title's audio/movie timing and
+  is not dead time that can simply be deleted.
+- Remaining budget: ~10 ms DSP settle, ~3.2 ms GL draw submission, ~0.5 ms
+  async readback, ~0.2 ms copy, plus guest game logic.  The next measurable
+  target is the ~3.2 ms GL submission, not the readback.
+
 ## D3D8 HLE remaining-cost profile (2026-10-20)
 
 - Added per-call HLE timers for setters, streams, textures and palette uploads.

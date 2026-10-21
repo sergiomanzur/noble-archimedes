@@ -108,6 +108,8 @@ def main() -> int:
     ap.add_argument("--backend", choices=bench.BACKENDS, default="software")
     ap.add_argument("--calibration", type=Path,
                     help="reuse an existing calibration xbox_stderr.log across backends")
+    ap.add_argument("--calibrate-backend", action="store_true",
+                    help="calibrate with the selected backend instead of software")
     ap.add_argument("--skip-calibration", action="store_true",
                     help="reuse --calibration (requires an explicit existing log)")
     ap.add_argument("--gpu-present", action="store_true",
@@ -139,8 +141,9 @@ def main() -> int:
         shutil.copy2(a.calibration, cal_log)
     else:
         print("[calibration] wall-clock pad timeline")
+        cal_backend = a.backend if a.calibrate_backend else "software"
         bench.run_one(bench.EXE_DEFAULT, pdir / "calibration", bench.MAIN_PAD,
-                      bench.MAIN_DURATION, "software", False, no_unique=True,
+                      bench.MAIN_DURATION, cal_backend, False, no_unique=True,
                       no_gpu_stats=True)
         try:
             points = calibration_points(bench.parse_log(cal_log))

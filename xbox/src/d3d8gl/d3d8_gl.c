@@ -7161,12 +7161,22 @@ void noble_d3d8_draw_indexed_up_host(unsigned primitive, unsigned count, const W
 /* Read a rendered guest surface once at Swap so the existing guest flip and
  * capture path see the GPU result. GL upper-left clip control makes row zero
  * the top of the target; no additional vertical flip belongs here. */
+#define READBACK_PBO_COUNT 2
+static GLuint readback_pbos[READBACK_PBO_COUNT];
+static int readback_pbo_next;
+static struct {
+    int valid;
+    unsigned width, height, pitch;
+} readback_pending[READBACK_PBO_COUNT];
+
 int noble_d3d8_readback_host(D3DSurface *surface)
 {
     struct render_target_entry *entry;
     struct xgpu_texture_description description;
     GLint framebuffer, pack_buffer, alignment, row_length, skip_rows, skip_pixels;
-    GLenum error;
+    GLenum error = GL_NO_ERROR;
+    void *dst;
+    unsigned pbo_size, i;
     if (!device.gl_ready || !surface || !surface->Data) return 0;
     xgpu_texture_describe(surface->Format, surface->Size, &description);
     if (!description.linear || (description.format != D3DFMT_LIN_A8R8G8B8 && description.format != D3DFMT_LIN_X8R8G8B8)) return 0;
@@ -7183,21 +7193,63 @@ int noble_d3d8_readback_host(D3DSurface *surface)
     if (!entry || !entry->target.written || entry->target.gl_width != description.width || entry->target.gl_height != description.height)
         return 0;
     render_target_resolve(&entry->target);
+
+    pbo_size = description.pitch * description.height;
+    dst = PLATFORM_PHYSICAL_TO_VIRTUAL(surface->Data);
+
     glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &framebuffer);
     glGetIntegerv(GL_PIXEL_PACK_BUFFER_BINDING, &pack_buffer);
     glGetIntegerv(GL_PACK_ALIGNMENT, &alignment);
     glGetIntegerv(GL_PACK_ROW_LENGTH, &row_length);
     glGetIntegerv(GL_PACK_SKIP_ROWS, &skip_rows);
     glGetIntegerv(GL_PACK_SKIP_PIXELS, &skip_pixels);
-    glBindFramebuffer(GL_READ_FRAMEBUFFER, framebuffer_get(entry->target.texture, 0));
-    glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
     glPixelStorei(GL_PACK_ALIGNMENT, 4);
     glPixelStorei(GL_PACK_ROW_LENGTH, description.pitch / 4);
     glPixelStorei(GL_PACK_SKIP_ROWS, 0);
     glPixelStorei(GL_PACK_SKIP_PIXELS, 0);
-    glReadPixels(0, 0, description.width, description.height, GL_BGRA, GL_UNSIGNED_BYTE,
-                    PLATFORM_PHYSICAL_TO_VIRTUAL(surface->Data));
-    error = glGetError();
+
+    /* The earlier read has had a whole frame (and, in gameplay, the audio
+     * reset wait) to finish.  Map it now and copy the completed pixels.  The
+     * guest sees one frame of latency, but never a synchronous GPU stall at
+     * Swap. */
+    if (readback_pbos[readback_pbo_next]) {
+        glBindBuffer(GL_PIXEL_PACK_BUFFER, readback_pbos[readback_pbo_next]);
+        dst = PLATFORM_PHYSICAL_TO_VIRTUAL(surface->Data);
+        if (readback_pending[readback_pbo_next].valid) {
+            const unsigned char *src = (const unsigned char *)glMapBufferRange(
+                GL_PIXEL_PACK_BUFFER, 0, pbo_size, GL_MAP_READ_BIT);
+            if (src && dst) {
+                for (i = 0; i < description.height; i++)
+                    memcpy((unsigned char *)dst + (size_t)i * description.pitch,
+                           src + (size_t)i * description.pitch,
+                           (size_t)description.width * 4);
+                error = glGetError();
+            }
+            glUnmapBuffer(GL_PIXEL_PACK_BUFFER);
+        }
+        glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
+    }
+
+    /* Queue this frame's read into the other PBO. */
+    {
+        int pbo = readback_pbo_next;
+        if (!readback_pbos[pbo]) {
+            glGenBuffers(1, &readback_pbos[pbo]);
+            if (!readback_pbos[pbo]) return 0;
+        }
+        glBindBuffer(GL_PIXEL_PACK_BUFFER, readback_pbos[pbo]);
+        glBufferData(GL_PIXEL_PACK_BUFFER, pbo_size, NULL, GL_STREAM_READ);
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, framebuffer_get(entry->target.texture, 0));
+        glReadPixels(0, 0, (GLsizei)description.width, (GLsizei)description.height,
+                     GL_BGRA, GL_UNSIGNED_BYTE, (void *)0);
+        if (glGetError() != GL_NO_ERROR) error = GL_INVALID_OPERATION;
+        readback_pending[pbo].valid = 1;
+        readback_pending[pbo].width = description.width;
+        readback_pending[pbo].height = description.height;
+        readback_pending[pbo].pitch = description.pitch;
+        readback_pbo_next = (pbo + 1) % READBACK_PBO_COUNT;
+        glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
+    }
 
     {
         static unsigned reads;

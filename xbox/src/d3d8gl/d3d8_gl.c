@@ -22,7 +22,11 @@ Conventions carried over from the Xbox:
 */
 
 #include "xgpu.h"
+#include "presentation_geometry.h"
+#include "wide_shader_class.h"
+#include "wide_setting_value.h"
 #include "sdl_platform.h"
+static unsigned long gpu_shader_compiles, gpu_pixel_cache_queries, gpu_pixel_cache_misses;
 #include "halo_ui_pointer.h"
 #include "port_config.h"
 #include "main/console.h"
@@ -92,6 +96,66 @@ the scale screen_mode_choose last chose) */
 static float screen_supersampling = 1.0f;
 static long ui_offset;
 #define UI_OFFSET ((GLint)ui_offset)
+
+/* Opt-in diagnostic prototype: off by default until scene and culling tests
+ * establish that the game can render beyond its original frustum. */
+static float wide_experiment_aspect(void)
+{
+    static int initialized;
+    static float aspect = 4.0f / 3.0f;
+    if (!initialized) {
+        const char *enable = getenv("RECOMP_WIDE_EXPERIMENT");
+        const char *value = getenv("RECOMP_WIDE_ASPECT");
+        initialized = 1;
+        if (enable && *enable && strcmp(enable, "0")) {
+            aspect = noble_wide_parse_float(value, 4.0f / 3.0f, 4.0f,
+                                             value ? 4.0f / 3.0f : 16.0f / 9.0f);
+        }
+    }
+    return aspect;
+}
+
+float noble_wide_window_aspect(void) { return wide_experiment_aspect(); }
+
+static float wide_experiment_fov(void)
+{
+    static int initialized;
+    static float multiplier = 1.0f;
+    if (!initialized) {
+        const char *enable = getenv("RECOMP_WIDE_EXPERIMENT");
+        const char *value = getenv("RECOMP_WIDE_FOV_SCALE");
+        initialized = 1;
+        if (enable && *enable && strcmp(enable, "0") && value) {
+            multiplier = noble_wide_parse_float(value, 0.5f, 2.0f, 1.0f);
+        }
+    }
+    return multiplier;
+}
+
+static int wide_probe_enabled(void)
+{
+    static int enabled = -1;
+    if (enabled < 0) enabled = getenv("RECOMP_WIDE_PROBE") != NULL;
+    return enabled;
+}
+
+static int wide_guest_projection_enabled(void)
+{
+    static int enabled = -1;
+    if (enabled < 0) {
+        const char *value = getenv("RECOMP_WIDE_GUEST_PROJECTION");
+        enabled = value && *value && strcmp(value, "0") &&
+            (wide_experiment_aspect() > 4.0f / 3.0f || wide_experiment_fov() != 1.0f);
+    }
+    return enabled;
+}
+
+static int wide_probe_capture_enabled(void)
+{
+    static int enabled = -1;
+    if (enabled < 0) enabled = getenv("RECOMP_WIDE_CAPTURE_DIR") != NULL;
+    return enabled;
+}
 
 /* ---------- anti-aliasing
 
@@ -491,6 +555,7 @@ struct vertex_shader_object
 	unsigned long id;
 	DWORD *instructions;
 	unsigned long instruction_count;
+	int wide_world_shader;
     float embedded_constants[XGPU_VERTEX_CONSTANT_COUNT][4];
     unsigned char embedded_present[XGPU_VERTEX_CONSTANT_COUNT];
 	struct vertex_element elements[XGPU_VERTEX_ATTRIBUTE_COUNT];
@@ -565,6 +630,9 @@ struct program_entry
 	GLint bump_matrix, bump_luminance, texture_scale;
 	GLint texture_lod_bias;
 	GLint screen_offset;
+	GLint wide_clip_scale;
+	GLint wide_clip_offset;
+	GLint wide_fov_scale;
 	GLint height_fade;
 	/* nv2a_pixel_shader_key's source_blend's color, and what it last had */
 	GLint blend_constant;
@@ -996,12 +1064,16 @@ static struct
 	float attribute_values[XGPU_VERTEX_ATTRIBUTE_COUNT][4];
 } gl_state;
 
+/* Test hooks (noble_d3d8_gl_shadow_probe): which invalidation path ran. */
+static unsigned long gl_full_invalidations, gl_binding_invalidations[3];
+
 #ifdef HALO_WEB
 static void vertex_array_cache_invalidate(void);
 #endif
 
 void xgpu_gl_state_invalidate(void)
 {
+	gl_full_invalidations++;
 	memset(&gl_state, 0xff, sizeof(gl_state));
 #ifdef HALO_WEB
 	vertex_array_cache_invalidate();
@@ -1081,6 +1153,57 @@ static void state_framebuffer(GLuint framebuffer)
 static int texture_slot(GLenum target)
 {
 	return target == GL_TEXTURE_CUBE_MAP ? 1 : target == GL_TEXTURE_3D ? 2 : 0;
+}
+
+/* (an upload's glBindTexture names a texture on the current unit: the
+bindings of that target are the only ones it can have changed. The shadow's
+other state is untouched, and the next draw re-sends only the stages whose
+texture differs, rather than all of the program, targets, raster state,
+vertex array and buffer bindings, several uploads a frame) */
+void xgpu_gl_texture_binding_invalidated(GLenum target)
+{
+	int slot = texture_slot(target);
+	int unit;
+
+	gl_binding_invalidations[slot]++;
+	for (unit = 0; unit < D3DTSS_MAXSTAGES; unit++)
+		gl_state.textures[unit][slot] = (GLuint)-1;
+}
+
+/* Test hooks (xbox/tests/d3d8gl_draw_test.c): see xgpu.h. */
+long noble_d3d8_gl_shadow_probe(int what, int unit, int slot)
+{
+	switch (what)
+	{
+	case _noble_gl_shadow_program:
+		return gl_state.program != (GLuint)-1;
+	case _noble_gl_shadow_framebuffer:
+		return gl_state.framebuffer != (GLuint)-1;
+	case _noble_gl_shadow_raster:
+		/* (the invalidated byte is 0xff; the viewport's is -1) */
+		return gl_state.viewport[0] != -1 && gl_state.depth_test != 0xff &&
+			gl_state.blend != 0xff && gl_state.cull_face != 0xff &&
+			gl_state.color_mask != 0xff && gl_state.scissor_test != 0xff;
+	case _noble_gl_shadow_vertex_array:
+#ifdef HALO_GLES
+		return 0; /* (the desktop draw test's: ES keeps attributes instead) */
+#else
+		return gl_state.vertex_array != (GLuint)-1;
+#endif
+	case _noble_gl_shadow_array_buffer:
+		return gl_state.array_buffer != (GLuint)-1;
+	case _noble_gl_shadow_attribute_value:
+		return unit >= 0 && unit < XGPU_VERTEX_ATTRIBUTE_COUNT &&
+			gl_state.attribute_value_kind[unit] != 0xff;
+	case _noble_gl_shadow_texture_binding:
+		return unit >= 0 && unit < D3DTSS_MAXSTAGES && slot >= 0 && slot < 3 &&
+			gl_state.textures[unit][slot] != (GLuint)-1;
+	case _noble_gl_shadow_full_invalidations:
+		return (long)gl_full_invalidations;
+	case _noble_gl_shadow_binding_invalidations:
+		return slot >= 0 && slot < 3 ? (long)gl_binding_invalidations[slot] : -1;
+	}
+	return -1;
 }
 
 #ifdef HALO_GLES
@@ -1406,6 +1529,7 @@ void WINAPI D3DDevice_BlockUntilVerticalBlank(void)
 
 GLuint xgpu_compile_shader(GLenum type, const char *source, const char *what)
 {
+    gpu_shader_compiles++;
 	GLuint shader = glCreateShader(type);
 	GLint status = 0;
 
@@ -1551,12 +1675,25 @@ static struct render_target_entry *render_target_get(const D3DSurface *surface)
 		}
 	}
 	surface_dimensions(surface, &width, &height, &depth);
+	if (wide_probe_enabled()) {
+		static unsigned logged;
+		if (logged++ < 20)
+			platform_log("[WIDE-PROBE] target data=%08lx back=%08lx depthbuf=%08lx %lux%lu depth=%d aspect=%g",
+				(unsigned long)surface->Data, (unsigned long)device.back_buffer.Data,
+				(unsigned long)device.depth_buffer.Data, width, height, depth,
+				wide_experiment_aspect());
+	}
+	if (width == 640 && height == 480 && wide_experiment_aspect() > 4.0f / 3.0f)
+	{
+		scale[0] = wide_experiment_aspect() / (4.0f / 3.0f);
+		kind = _render_target_screen;
+	}
 	/* the screen's targets are drawn at the screen's scale, and so is the
 	secondary target (the reflections' and active camouflage's: its size is
 	rasterizer_xbox.c's), which keeps the game's 320x240 units, that its
 	shaders' constants are in, and gets the screen's pixels a unit; the
 	shadow maps at display.shadow_resolution's (halo_shadow_map_scale) */
-	if ((width == (unsigned long)halo_screen_width() && height == SCREEN_HEIGHT) ||
+	else if ((width == (unsigned long)halo_screen_width() && height == SCREEN_HEIGHT) ||
 		(!depth && width == SECONDARY_TARGET_WIDTH && height == SECONDARY_TARGET_HEIGHT))
 	{
 		scale[0] = screen_scale[0];
@@ -1677,6 +1814,7 @@ int noble_d3d8_copy_rects_host(const D3DSurface *source,const RECT *rects,
     struct render_target_entry *dst;
     struct xgpu_texture_description description;
     unsigned i;
+    int whole;
     if(!device.gl_ready || !source || !destination) return 0;
     src=xgpu_render_target_find(source->Data);
     if(!src || !src->written) return 0;
@@ -1697,13 +1835,35 @@ int noble_d3d8_copy_rects_host(const D3DSurface *source,const RECT *rects,
     render_target_resolve(src);
     dst=render_target_get(destination);
     if(!dst || dst->target.texture==src->texture) return 0;
+    whole = count == 1 && (!rects || (rects[0].left == 0 && rects[0].top == 0 &&
+        rects[0].right == (int)description.width && rects[0].bottom == (int)description.height)) &&
+        (!points || (points[0].x == 0 && points[0].y == 0)) &&
+        src->width == description.width && src->height == description.height;
     if(!dst->target.written) {
-        glBindTexture(GL_TEXTURE_2D,dst->target.texture);
-        glPixelStorei(GL_UNPACK_ALIGNMENT,4);
-        glPixelStorei(GL_UNPACK_ROW_LENGTH,(GLint)description.pitch/4);
-        glTexSubImage2D(GL_TEXTURE_2D,0,0,0,(GLsizei)description.width,(GLsizei)description.height,
-            GL_BGRA,GL_UNSIGNED_BYTE,PLATFORM_PHYSICAL_TO_VIRTUAL(destination->Data));
-        glPixelStorei(GL_UNPACK_ROW_LENGTH,0);
+        if (dst->target.scale[0] == 1.0f && dst->target.scale[1] == 1.0f) {
+            glBindTexture(GL_TEXTURE_2D,dst->target.texture);
+            glPixelStorei(GL_UNPACK_ALIGNMENT,4);
+            glPixelStorei(GL_UNPACK_ROW_LENGTH,(GLint)description.pitch/4);
+            glTexSubImage2D(GL_TEXTURE_2D,0,0,0,(GLsizei)description.width,(GLsizei)description.height,
+                GL_BGRA,GL_UNSIGNED_BYTE,PLATFORM_PHYSICAL_TO_VIRTUAL(destination->Data));
+            glPixelStorei(GL_UNPACK_ROW_LENGTH,0);
+        } else if (!whole) {
+            int offset;
+            if (dst->target.scale[1] != 1.0f || dst->target.gl_width < description.width ||
+                dst->target.gl_height != description.height) return 0;
+            offset = noble_guest_target_x(0, (int)description.width, (int)dst->target.gl_width, 1.0f);
+            glBindFramebuffer(GL_DRAW_FRAMEBUFFER, framebuffer_get(dst->target.texture,0));
+            glDisable(GL_SCISSOR_TEST);
+            glColorMask(GL_TRUE,GL_TRUE,GL_TRUE,GL_TRUE);
+            glClearColor(0,0,0,0);
+            glClear(GL_COLOR_BUFFER_BIT);
+            glBindTexture(GL_TEXTURE_2D,dst->target.texture);
+            glPixelStorei(GL_UNPACK_ALIGNMENT,4);
+            glPixelStorei(GL_UNPACK_ROW_LENGTH,(GLint)description.pitch/4);
+            glTexSubImage2D(GL_TEXTURE_2D,0,offset,0,(GLsizei)description.width,(GLsizei)description.height,
+                GL_BGRA,GL_UNSIGNED_BYTE,PLATFORM_PHYSICAL_TO_VIRTUAL(destination->Data));
+            glPixelStorei(GL_UNPACK_ROW_LENGTH,0);
+        }
     }
     {
         GLuint read=framebuffer_get(src->texture,0);
@@ -1717,7 +1877,17 @@ int noble_d3d8_copy_rects_host(const D3DSurface *source,const RECT *rects,
         int w=rects?rects[i].right-x:(int)src->width;
         int h=rects?rects[i].bottom-y:(int)src->height;
         int dx=points?points[i].x:0,dy=points?points[i].y:0;
-        glBlitFramebuffer(x,y,x+w,y+h,dx,dy,dx+w,dy+h,GL_COLOR_BUFFER_BIT,GL_NEAREST);
+        int sx0, sx1, dx0, dx1;
+        if (whole) { sx0=0; sx1=(int)src->gl_width; dx0=0; dx1=(int)dst->target.gl_width; }
+        else {
+            sx0 = src->gl_width > src->width && src->scale[1] == 1.0f ? noble_guest_target_x(x,(int)src->width,(int)src->gl_width,1.0f) : (int)(x*src->scale[0]+0.5f);
+            sx1 = src->gl_width > src->width && src->scale[1] == 1.0f ? noble_guest_target_x(x+w,(int)src->width,(int)src->gl_width,1.0f) : (int)((x+w)*src->scale[0]+0.5f);
+            dx0 = dst->target.gl_width > dst->target.width && dst->target.scale[1] == 1.0f ? noble_guest_target_x(dx,(int)dst->target.width,(int)dst->target.gl_width,1.0f) : (int)(dx*dst->target.scale[0]+0.5f);
+            dx1 = dst->target.gl_width > dst->target.width && dst->target.scale[1] == 1.0f ? noble_guest_target_x(dx+w,(int)dst->target.width,(int)dst->target.gl_width,1.0f) : (int)((dx+w)*dst->target.scale[0]+0.5f);
+        }
+        glBlitFramebuffer(sx0, (GLint)(y*src->scale[1]+0.5f), sx1, (GLint)((y+h)*src->scale[1]+0.5f),
+            dx0, (GLint)(dy*dst->target.scale[1]+0.5f), dx1, (GLint)((dy+h)*dst->target.scale[1]+0.5f),
+            GL_COLOR_BUFFER_BIT,GL_NEAREST);
     }
     dst->target.written=++render_target_write_serial;
     dst->last_rendered=device.frame+1;
@@ -1841,6 +2011,8 @@ static GLint target_pixel(float coordinate, int axis)
 	return scaled_pixel(coordinate, target_scale[axis]);
 }
 
+static BOOL trace_frame(void);
+
 /* binds the framebuffer for the current targets; returns FALSE if there is
 nothing to draw into */
 static BOOL bind_targets(BOOL *has_depth)
@@ -1851,6 +2023,14 @@ static BOOL bind_targets(BOOL *has_depth)
 
 	if (depth && !depth->target.depth)
 		depth = NULL;
+	if (wide_probe_enabled() && trace_frame()) {
+		static unsigned long last_frame = (unsigned long)-1;
+		static unsigned logged;
+		if (last_frame != device.frame) { last_frame = device.frame; logged = 0; }
+		if (logged++ < 5) platform_log("[WIDE-PROBE] attachments color=%lux%lu depth=%lux%lu",
+			color ? color->target.gl_width : 0, color ? color->target.gl_height : 0,
+			depth ? depth->target.gl_width : 0, depth ? depth->target.gl_height : 0);
+	}
 	if (!color && !depth)
 		return FALSE;
 	if (color)
@@ -3329,6 +3509,7 @@ static GLuint vertex_shader_get(struct vertex_shader_object *program, BOOL immed
 	{
 		char *source = nv2a_vertex_shader_to_glsl(program->instructions, program->instruction_count,
 			immediate ? 0 : device.vertex_shader->packed_mask, lit ? &program->lighting : NULL);
+		program->wide_world_shader = noble_wide_projection_shader(source);
 
 		program->shaders_tried |= tried;
 		*shader = xgpu_compile_shader(GL_VERTEX_SHADER, source, "vertex");
@@ -3354,6 +3535,7 @@ typedef char pixel_shader_key_size_assert[sizeof(struct nv2a_pixel_shader_key) %
 
 static GLuint fragment_shader_get(const struct nv2a_pixel_shader_key *key)
 {
+    gpu_pixel_cache_queries++;
 	/* consecutive draws mostly use one of a few pixel shaders (an object's
 	parts take turns) */
 #define RECENT_FRAGMENT_COUNT 4
@@ -3379,6 +3561,7 @@ static GLuint fragment_shader_get(const struct nv2a_pixel_shader_key *key)
 			return entry->shader;
 		}
 	}
+	gpu_pixel_cache_misses++;
 	entry = calloc(1, sizeof(*entry));
 	entry->hash = hash;
 	entry->key = *key;
@@ -3480,6 +3663,12 @@ static struct program_entry *program_get(GLuint vertex_shader, GLuint fragment_s
 	entry->texture_scale = glGetUniformLocation(entry->program, "texture_scale");
 	entry->texture_lod_bias = glGetUniformLocation(entry->program, "texture_lod_bias");
 	entry->screen_offset = glGetUniformLocation(entry->program, "screen_offset");
+	entry->wide_clip_scale = glGetUniformLocation(entry->program, "wide_clip_scale");
+	entry->wide_clip_offset = glGetUniformLocation(entry->program, "wide_clip_offset");
+	entry->wide_fov_scale = glGetUniformLocation(entry->program, "wide_fov_scale");
+	glUniform1f(entry->wide_clip_scale, 1.0f);
+	glUniform1f(entry->wide_clip_offset, 0.0f);
+	glUniform1f(entry->wide_fov_scale, 1.0f);
 	entry->height_fade = glGetUniformLocation(entry->program, "height_fade");
 	entry->blend_constant = glGetUniformLocation(entry->program, "blend_constant");
 	entry->model_lights = glGetUniformLocation(entry->program, "model_lights");
@@ -3956,6 +4145,9 @@ static GLuint feedback_copy(struct xgpu_render_target *target)
 }
 #endif
 
+static int wide_sampling_screen;
+static int wide_probe_intermediate;
+static void write_screenshot(struct render_target_entry *target);
 static void bind_textures(struct nv2a_pixel_shader_key *key, float texture_scale[4][4])
 {
 	/* Bind only after resolving every stage, since texture uploads can
@@ -3964,6 +4156,7 @@ static void bind_textures(struct nv2a_pixel_shader_key *key, float texture_scale
 	GLuint gl_textures[D3DTSS_MAXSTAGES];
 	int stage;
 
+	wide_sampling_screen = 0;
 	for (stage = 0; stage < D3DTSS_MAXSTAGES; stage++)
 	{
 		D3DBaseTexture *texture = device.textures[stage];
@@ -3986,6 +4179,21 @@ static void bind_textures(struct nv2a_pixel_shader_key *key, float texture_scale
 
 			if (target)
 			{
+				if (wide_probe_enabled() && trace_frame())
+					platform_log("[WIDE-PROBE] sample stage=%d target=%lux%lu actual=%lux%lu",
+						stage, target->width, target->height, target->gl_width, target->gl_height);
+				if (wide_probe_capture_enabled() && trace_frame() && stage == 0 &&
+				    target->width == 640 && target->height == 480) {
+					struct render_target_entry snapshot;
+					memset(&snapshot, 0, sizeof(snapshot));
+					snapshot.target = *target;
+					wide_probe_intermediate = 1;
+					write_screenshot(&snapshot);
+					wide_probe_intermediate = 0;
+				}
+				if (stage == 0 && target->width == 640 && target->height == 480 &&
+				    target->gl_width > target->width)
+					wide_sampling_screen = 1;
 				/* (multisampled: its pixels drawn since, resolved) */
 				render_target_resolve(target);
 				xgpu_texture_describe(texture->Format, texture->Size, &description);
@@ -4106,6 +4314,14 @@ static void apply_raster_state(BOOL has_depth)
 	viewport[1] = target_pixel((float)device.viewport.Y, 1);
 	viewport[2] = target_pixel((float)(device.viewport.X + device.viewport.Width), 0) - viewport[0];
 	viewport[3] = target_pixel((float)(device.viewport.Y + device.viewport.Height), 1) - viewport[1];
+	if (wide_probe_enabled() && trace_frame()) {
+		static unsigned long last_frame = (unsigned long)-1;
+		static unsigned logged;
+		if (last_frame != device.frame) { last_frame = device.frame; logged = 0; }
+		if (logged++ < 3) platform_log("[WIDE-PROBE] viewport=%d,%d,%d,%d scale=%g,%g ui=%ld vpconst=%g,%g",
+			viewport[0],viewport[1],viewport[2],viewport[3],target_scale[0],target_scale[1],ui_offset,
+			device.viewport_scale[0],device.viewport_offset[0]);
+	}
 	if (memcmp(gl_state.viewport, viewport, sizeof(viewport)))
 	{
 		memcpy(gl_state.viewport, viewport, sizeof(viewport));
@@ -4490,6 +4706,9 @@ static struct program_entry *prepare_draw(BOOL immediate)
 #endif
 	draw_flush();
 	state_program(entry->program);
+	if (wide_probe_enabled() && trace_frame() && wide_sampling_screen)
+		platform_log("[WIDE-PROBE] screen-sample zen=%lu scale=%g location=%d",
+			(unsigned long)D3D__RenderState[D3DRS_ZENABLE], target_scale[0], entry->wide_clip_scale);
 	if (key.source_blend && entry->blend_constant >= 0)
 	{
 		float blend_constant[4];
@@ -4664,7 +4883,16 @@ static struct program_entry *prepare_draw(BOOL immediate)
 	}
 	/* and a program that has had them since needs none of them */
 	if (entry->uniforms_serial == draw_uniforms_serial)
+	{
+		if (wide_experiment_aspect() > 4.0f / 3.0f || wide_experiment_fov() != 1.0f) {
+			float ws = target_scale[0] > 1.0f && !(wide_sampling_screen && !D3D__RenderState[D3DRS_ZENABLE]) &&
+				!(wide_guest_projection_enabled() && program->wide_world_shader) ? noble_wide_clip_scale(wide_experiment_aspect(), 1.0f) : 1.0f;
+			glUniform1f(entry->wide_clip_scale, ws);
+			glUniform1f(entry->wide_clip_offset, 0.0f);
+			glUniform1f(entry->wide_fov_scale, program->wide_world_shader && !wide_guest_projection_enabled() ? 1.0f / wide_experiment_fov() : 1.0f);
+		}
 		return entry;
+	}
 	entry->uniforms_serial = draw_uniforms_serial;
 	uniform_vec4(entry->viewport_scale, entry->uniforms.viewport_scale, draw_uniforms.viewport_scale, 1);
 	uniform_vec4(entry->viewport_offset, entry->uniforms.viewport_offset, draw_uniforms.viewport_offset, 1);
@@ -4680,6 +4908,13 @@ static struct program_entry *prepare_draw(BOOL immediate)
 	uniform_vec4(entry->bump_luminance, entry->uniforms.bump_luminance[0], draw_uniforms.bump_luminance[0], 4);
 	uniform_vec4(entry->texture_scale, entry->uniforms.texture_scale[0], draw_uniforms.texture_scale[0], 4);
 	uniform_float(entry->screen_offset, &entry->uniforms.screen_offset, draw_uniforms.screen_offset);
+	if (wide_experiment_aspect() > 4.0f / 3.0f || wide_experiment_fov() != 1.0f) {
+		float ws = target_scale[0] > 1.0f && !(wide_sampling_screen && !D3D__RenderState[D3DRS_ZENABLE]) &&
+			!(wide_guest_projection_enabled() && program->wide_world_shader) ? noble_wide_clip_scale(wide_experiment_aspect(), 1.0f) : 1.0f;
+		glUniform1f(entry->wide_clip_scale, ws);
+		glUniform1f(entry->wide_clip_offset, 0.0f);
+		glUniform1f(entry->wide_fov_scale, program->wide_world_shader && !wide_guest_projection_enabled() ? 1.0f / wide_experiment_fov() : 1.0f);
+	}
 	uniform_vec4(entry->texture_lod_bias, entry->uniforms.texture_lod_bias, draw_uniforms.texture_lod_bias, 1);
 	uniform_vec4(entry->height_fade, entry->uniforms.height_fade, draw_uniforms.height_fade, 1);
 	return entry;
@@ -4690,9 +4925,26 @@ static struct program_entry *prepare_draw(BOOL immediate)
 static BOOL trace_frame(void)
 {
 	static long frame = -2;
+	static long probe_frames[8];
+	static unsigned probe_count;
+	unsigned i;
 
 	if (frame == -2)
+	{
+		const char *p = getenv("RECOMP_WIDE_TRACE_FRAMES");
+		while (p && *p && probe_count < 8)
+		{
+			char *end;
+			long value = strtol(p, &end, 10);
+			if (end == p || value < 0) break;
+			probe_frames[probe_count++] = value;
+			if (*end != ',') break;
+			p = end + 1;
+		}
 		frame = config_integer("debug.gpu_trace_frame");
+	}
+	for (i = 0; i < probe_count; ++i)
+		if (device.frame == (unsigned long)probe_frames[i]) return TRUE;
 	return frame >= 0 && device.frame == (unsigned long)frame;
 }
 
@@ -4703,6 +4955,10 @@ static void trace_draw(const char *kind, D3DPRIMITIVETYPE type, unsigned long co
 
 	if (!trace_frame())
 		return;
+	if (wide_probe_enabled())
+		platform_log("[WIDE-PROBE] shader id=%lu world=%d fov=%g",
+			program ? program->id : 0, program ? program->wide_world_shader : 0,
+			wide_experiment_fov());
     if (device.up_vertices) {
         const float *v = device.up_vertices;
         platform_log("    UP first = %g %g %g %g stride=%u", v[0],v[1],v[2],v[3],device.streams[0].stride);
@@ -4798,10 +5054,46 @@ thousands; Android's GL has no such thread). */
 #define BUFFER_UPLOAD_PIECE 4096
 #define BUFFER_UPLOAD_PIECES_MAXIMUM 16
 
+/* Opt-in submission experiment; no guest-memory caching is involved. */
+static struct
+{
+	unsigned long first_frame;
+	unsigned long long uploads, bytes, calls;
+	Uint64 ticks;
+} upload_perf;
+
 static void buffer_upload(GLenum target, unsigned long offset, unsigned long size, const void *data)
 {
+	static int whole = -1, measure = -1;
+	Uint64 started = 0;
+	unsigned long calls = 0;
+	if (whole < 0)
+	{
+		const char *value = getenv("RECOMP_D3D8GL_UPLOAD_WHOLE");
+		whole = value && *value && strcmp(value, "0");
+		value = getenv("RECOMP_D3D8GL_UPLOAD_PERF");
+		measure = value && *value && strcmp(value, "0");
+		upload_perf.first_frame = device.frame;
+	}
+	if (measure)
+	{
+		unsigned long frames = device.frame - upload_perf.first_frame;
+		if (frames >= 120)
+		{
+			fprintf(stderr, "[UPLOAD-PERF] mode=%s frames=%lu uploads=%.2f KiB=%.2f calls=%.2f cpu=%.3f ms/frame\n",
+				whole ? "whole" : "chunked", frames,
+				(double)upload_perf.uploads / frames, (double)upload_perf.bytes / (1024.0 * frames),
+				(double)upload_perf.calls / frames,
+				(double)upload_perf.ticks * 1000.0 / ((double)SDL_GetPerformanceFrequency() * frames));
+			memset(&upload_perf, 0, sizeof(upload_perf));
+			upload_perf.first_frame = device.frame;
+		}
+		upload_perf.uploads++;
+		upload_perf.bytes += size;
+		started = SDL_GetPerformanceCounter();
+	}
 #ifndef HALO_ANDROID
-	if (size <= BUFFER_UPLOAD_PIECE * BUFFER_UPLOAD_PIECES_MAXIMUM)
+	if (!whole && size <= BUFFER_UPLOAD_PIECE * BUFFER_UPLOAD_PIECES_MAXIMUM)
 	{
 		const unsigned char *bytes = data;
 
@@ -4810,14 +5102,37 @@ static void buffer_upload(GLenum target, unsigned long offset, unsigned long siz
 			unsigned long piece = size < BUFFER_UPLOAD_PIECE ? size : BUFFER_UPLOAD_PIECE;
 
 			glBufferSubData(target, (GLintptr)offset, (GLsizeiptr)piece, bytes);
+			calls++;
 			offset += piece;
 			bytes += piece;
 			size -= piece;
 		}
-		return;
 	}
+	else
 #endif
-	glBufferSubData(target, (GLintptr)offset, (GLsizeiptr)size, data);
+	{
+		glBufferSubData(target, (GLintptr)offset, (GLsizeiptr)size, data);
+		calls = 1;
+	}
+	if (measure)
+	{
+		upload_perf.ticks += SDL_GetPerformanceCounter() - started;
+		upload_perf.calls += calls;
+	}
+}
+
+__declspec(dllexport) void noble_d3d8_upload_stats(unsigned long long *uploads,
+                                                    unsigned long long *bytes,
+                                                    unsigned long long *calls,
+                                                    double *milliseconds)
+{
+    if (uploads) *uploads = upload_perf.uploads;
+    if (bytes) *bytes = upload_perf.bytes;
+    if (calls) *calls = upload_perf.calls;
+    if (milliseconds) {
+        Uint64 frequency = SDL_GetPerformanceFrequency();
+        *milliseconds = frequency ? (double)upload_perf.ticks * 1000.0 / (double)frequency : 0.0;
+    }
 }
 
 /* ---------- the contiguous window in GL buffers
@@ -6572,6 +6887,16 @@ static void write_screenshot(struct render_target_entry *target)
 
 	if (!directory)
 		return;
+	if (wide_probe_enabled()) {
+		GLint vp[4], scissor[4], pack, row_length;
+		glGetIntegerv(GL_VIEWPORT, vp);
+		glGetIntegerv(GL_SCISSOR_BOX, scissor);
+		glGetIntegerv(GL_PIXEL_PACK_BUFFER_BINDING, &pack);
+		glGetIntegerv(GL_PACK_ROW_LENGTH, &row_length);
+		platform_log("[WIDE-PROBE] capture %s viewport=%d,%d,%d,%d scissor=%d,%d,%d,%d pack=%d row=%d",
+			wide_probe_intermediate ? "intermediate" : "final", vp[0], vp[1], vp[2], vp[3],
+			scissor[0], scissor[1], scissor[2], scissor[3], pack, row_length);
+	}
 	pixels = malloc(image_size);
 	glBindFramebuffer(GL_READ_FRAMEBUFFER, framebuffer_get(target->target.texture, 0));
 #ifdef HALO_GLES
@@ -6604,7 +6929,8 @@ static void write_screenshot(struct render_target_entry *target)
 #endif
 		pixels[row * 4 + 3] = 0xff;
 	}
-	snprintf(path, sizeof(path), "%s/frame%05lu.bmp", directory, device.frame);
+	snprintf(path, sizeof(path), "%s/%s%05lu.bmp", directory,
+		wide_probe_intermediate ? "intermediate" : "frame", device.frame);
 	file = fopen(path, "wb");
 	if (file)
 	{
@@ -6913,6 +7239,7 @@ void WINAPI D3DDevice_Present(CONST RECT *source_rectangle, CONST RECT *destinat
 	{
 		struct render_target_entry *back_buffer = render_target_get(&device.back_buffer);
 		int window_width, window_height, width, height, x, y;
+		struct noble_present_rect rect;
 
 		if (trace_frame())
 			platform_log("present back buffer %08lx texture %u", (unsigned long)device.back_buffer.Data,
@@ -6923,22 +7250,22 @@ void WINAPI D3DDevice_Present(CONST RECT *source_rectangle, CONST RECT *destinat
 #endif
 		if (screenshot_every > 0 && device.frame % (unsigned long)screenshot_every == 0)
 			write_screenshot(back_buffer);
+		if (wide_probe_capture_enabled() && trace_frame())
+		{
+			platform_log("[WIDE-PROBE] end renderer_frame=%lu", device.frame);
+			write_screenshot(back_buffer);
+		}
 #ifndef HALO_GLES
 		if (platform_screenshot_take_request())
 			write_key_screenshot(back_buffer);
 #endif
 
 		platform_video_drawable_size(&window_width, &window_height);
-		/* letterbox to the back buffer's aspect ratio */
-		width = window_width;
-		height = (int)((long)window_width * back_buffer->target.gl_height / back_buffer->target.gl_width);
-		if (height > window_height)
-		{
-			height = window_height;
-			width = (int)((long)window_height * back_buffer->target.gl_width / back_buffer->target.gl_height);
-		}
-		x = (window_width - width) / 2;
-		y = (window_height - height) / 2;
+		/* Preserve the source aspect ratio, including for menus and movies. */
+		if (!noble_present_fit(window_width, window_height,
+			(int)back_buffer->target.gl_width, (int)back_buffer->target.gl_height, &rect))
+			memset(&rect, 0, sizeof(rect));
+		x = rect.x; y = rect.y; width = rect.width; height = rect.height;
 		glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
 		glDisable(GL_SCISSOR_TEST);
 		glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
@@ -7158,10 +7485,115 @@ void noble_d3d8_draw_indexed_up_host(unsigned primitive, unsigned count, const W
     device.up_vertices = old_up;
 }
 
+/* Non-blocking GL timer query around one swap's draw work. The result is
+ * read from an older query so a busy GPU never stalls the guest thread. */
+#define GPU_FRAME_QUERY_RING 3
+static GLuint gpu_frame_queries[GPU_FRAME_QUERY_RING];
+static int gpu_frame_query_index = -1;
+static int gpu_frame_query_active;
+static double gpu_frame_query_ms;
+static unsigned long gpu_query_frame[GPU_FRAME_QUERY_RING];
+static unsigned char gpu_query_ended[GPU_FRAME_QUERY_RING];
+static unsigned char gpu_query_taken[GPU_FRAME_QUERY_RING];
+
+static void gpu_frame_query_begin(void)
+{
+    if (!device.gl_ready)
+        return;
+    if (!gpu_frame_queries[0])
+        glGenQueries(GPU_FRAME_QUERY_RING, gpu_frame_queries);
+    if (!gpu_frame_queries[0])
+        return;
+    if (gpu_frame_query_active)
+        glEndQuery(GL_TIME_ELAPSED);
+    gpu_frame_query_index = (gpu_frame_query_index + 1) % GPU_FRAME_QUERY_RING;
+    gpu_query_frame[gpu_frame_query_index] = device.frame;
+    gpu_query_ended[gpu_frame_query_index] = 0;
+    gpu_query_taken[gpu_frame_query_index] = 0;
+    glBeginQuery(GL_TIME_ELAPSED, gpu_frame_queries[gpu_frame_query_index]);
+    gpu_frame_query_active = 1;
+}
+
+static double gpu_frame_query_end(void)
+{
+    if (!device.gl_ready || !gpu_frame_query_active)
+        return gpu_frame_query_ms;
+    glEndQuery(GL_TIME_ELAPSED);
+    gpu_frame_query_active = 0;
+    if (gpu_frame_query_index >= 0)
+    {
+        gpu_query_ended[gpu_frame_query_index] = 1;
+        int read = (gpu_frame_query_index + GPU_FRAME_QUERY_RING - 1) % GPU_FRAME_QUERY_RING;
+        GLuint available = 0;
+        glGetQueryObjectuiv(gpu_frame_queries[read], GL_QUERY_RESULT_AVAILABLE, &available);
+        if (available)
+        {
+            GLuint64 elapsed = 0;
+            glGetQueryObjectui64v(gpu_frame_queries[read], GL_QUERY_RESULT, &elapsed);
+            gpu_frame_query_ms = (double)elapsed / 1000000.0;
+        }
+    }
+    return gpu_frame_query_ms;
+}
+
+static int gpu_frame_query_poll(unsigned long *frame, double *milliseconds)
+{
+    int i;
+    if (!device.gl_ready || !gpu_frame_queries[0])
+        return 0;
+    for (i = 0; i < GPU_FRAME_QUERY_RING; i++)
+    {
+        GLuint available = 0;
+        if (!gpu_query_ended[i] || gpu_query_taken[i] || !gpu_frame_queries[i])
+            continue;
+        glGetQueryObjectuiv(gpu_frame_queries[i], GL_QUERY_RESULT_AVAILABLE, &available);
+        if (!available)
+            continue;
+        {
+            GLuint64 elapsed = 0;
+            glGetQueryObjectui64v(gpu_frame_queries[i], GL_QUERY_RESULT, &elapsed);
+            gpu_query_taken[i] = 1;
+            if (frame) *frame = gpu_query_frame[i];
+            if (milliseconds) *milliseconds = (double)elapsed / 1000000.0;
+            return 1;
+        }
+    }
+    return 0;
+}
+
+double noble_d3d8_gpu_frame_ms(void)
+{
+    return gpu_frame_query_ms;
+}
+
+__declspec(dllexport) void noble_d3d8_gpu_frame_begin(void)
+{
+    gpu_frame_query_begin();
+}
+
+__declspec(dllexport) double noble_d3d8_gpu_frame_end(void)
+{
+    return gpu_frame_query_end();
+}
+
+__declspec(dllexport) int noble_d3d8_gpu_frame_poll(unsigned long *frame, double *milliseconds)
+{
+    return gpu_frame_query_poll(frame, milliseconds);
+}
+
+__declspec(dllexport) void noble_d3d8_shader_stats(unsigned long *compiles,
+                                                    unsigned long *queries,
+                                                    unsigned long *misses)
+{
+    if (compiles) *compiles = gpu_shader_compiles;
+    if (queries) *queries = gpu_pixel_cache_queries;
+    if (misses) *misses = gpu_pixel_cache_misses;
+}
+
 /* Read a rendered guest surface once at Swap so the existing guest flip and
  * capture path see the GPU result. GL upper-left clip control makes row zero
  * the top of the target; no additional vertical flip belongs here. */
-#define READBACK_PBO_COUNT 2
+#define READBACK_PBO_COUNT 1
 static GLuint readback_pbos[READBACK_PBO_COUNT];
 static int readback_pbo_next;
 static struct {
@@ -7169,7 +7601,28 @@ static struct {
     unsigned width, height, pitch;
 } readback_pending[READBACK_PBO_COUNT];
 
-int noble_d3d8_readback_host(D3DSurface *surface)
+static double readback_clock_ms(void)
+{
+    static Uint64 frequency;
+    if (!frequency) frequency = SDL_GetPerformanceFrequency();
+    return frequency ? (double)SDL_GetPerformanceCounter() * 1000.0 / (double)frequency : 0.0;
+}
+
+static unsigned long long readback_frames;
+static double readback_map_ms, readback_copy_ms, readback_enqueue_ms;
+
+__declspec(dllexport) void noble_d3d8_readback_stats(unsigned long long *frames,
+                                                      double *map_ms,
+                                                      double *copy_ms,
+                                                      double *enqueue_ms)
+{
+    if (frames) *frames = readback_frames;
+    if (map_ms) *map_ms = readback_map_ms;
+    if (copy_ms) *copy_ms = readback_copy_ms;
+    if (enqueue_ms) *enqueue_ms = readback_enqueue_ms;
+}
+
+static int readback_host(D3DSurface *surface, int asynchronous)
 {
     struct render_target_entry *entry;
     struct xgpu_texture_description description;
@@ -7177,6 +7630,8 @@ int noble_d3d8_readback_host(D3DSurface *surface)
     GLenum error = GL_NO_ERROR;
     void *dst;
     unsigned pbo_size, i;
+    GLint read_x = 0;
+    int copied = 0;
     if (!device.gl_ready || !surface || !surface->Data) return 0;
     xgpu_texture_describe(surface->Format, surface->Size, &description);
     if (!description.linear || (description.format != D3DFMT_LIN_A8R8G8B8 && description.format != D3DFMT_LIN_X8R8G8B8)) return 0;
@@ -7190,8 +7645,13 @@ int noble_d3d8_readback_host(D3DSurface *surface)
         entry = render_target_get(device.render_target);
     else
         entry = render_target_get(surface);
-    if (!entry || !entry->target.written || entry->target.gl_width != description.width || entry->target.gl_height != description.height)
+    if (!entry || !entry->target.written || entry->target.gl_height != description.height ||
+        entry->target.gl_width < description.width)
         return 0;
+    if (entry->target.gl_width != description.width) {
+        if (wide_experiment_aspect() <= 4.0f / 3.0f || entry->kind != _render_target_screen) return 0;
+        read_x = (GLint)((entry->target.gl_width - description.width) / 2);
+    }
     render_target_resolve(&entry->target);
 
     pbo_size = description.pitch * description.height;
@@ -7208,45 +7668,89 @@ int noble_d3d8_readback_host(D3DSurface *surface)
     glPixelStorei(GL_PACK_SKIP_ROWS, 0);
     glPixelStorei(GL_PACK_SKIP_PIXELS, 0);
 
-    /* The earlier read has had a whole frame (and, in gameplay, the audio
-     * reset wait) to finish.  Map it now and copy the completed pixels.  The
-     * guest sees one frame of latency, but never a synchronous GPU stall at
-     * Swap. */
-    if (readback_pbos[readback_pbo_next]) {
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, framebuffer_get(entry->target.texture, 0));
+
+    /* The slot being reused is two swaps old. Shape changes invalidate the
+     * entire ring: neither mapping nor copying can use the new dimensions
+     * to interpret an older allocation. Rotating same-size guest back buffers
+     * intentionally shares this ring. */
+    if (asynchronous) {
+        for (i = 0; i < READBACK_PBO_COUNT; i++) {
+            if (readback_pending[i].valid &&
+                (readback_pending[i].width != description.width ||
+                 readback_pending[i].height != description.height ||
+                 readback_pending[i].pitch != description.pitch)) {
+                memset(readback_pending, 0, sizeof(readback_pending));
+                break;
+            }
+        }
+    }
+    if (asynchronous && readback_pbos[readback_pbo_next]) {
         glBindBuffer(GL_PIXEL_PACK_BUFFER, readback_pbos[readback_pbo_next]);
         dst = PLATFORM_PHYSICAL_TO_VIRTUAL(surface->Data);
         if (readback_pending[readback_pbo_next].valid) {
+            double map_start = readback_clock_ms();
             const unsigned char *src = (const unsigned char *)glMapBufferRange(
                 GL_PIXEL_PACK_BUFFER, 0, pbo_size, GL_MAP_READ_BIT);
+            readback_map_ms += readback_clock_ms() - map_start;
             if (src && dst) {
+                double copy_start = readback_clock_ms();
                 for (i = 0; i < description.height; i++)
                     memcpy((unsigned char *)dst + (size_t)i * description.pitch,
                            src + (size_t)i * description.pitch,
                            (size_t)description.width * 4);
-                error = glGetError();
+                readback_copy_ms += readback_clock_ms() - copy_start;
+                copied = 1;
             }
-            glUnmapBuffer(GL_PIXEL_PACK_BUFFER);
+            if (src && !glUnmapBuffer(GL_PIXEL_PACK_BUFFER)) copied = 0;
+            /* A failed map must not publish stale bytes. Refill this swap
+             * synchronously below; the next queued read can recover. */
+            if (glGetError() != GL_NO_ERROR) copied = 0;
+            readback_pending[readback_pbo_next].valid = 0;
         }
         glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
     }
 
-    /* Queue this frame's read into the other PBO. */
-    {
+    /* Explicit reads and the first two swaps need current pixels. Reporting
+     * success without a copy would publish uninitialized guest memory. */
+    if (!copied) {
+        glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
+        {
+            double enqueue_start = readback_clock_ms();
+            glReadPixels(read_x, 0, description.width, description.height,
+                         GL_BGRA, GL_UNSIGNED_BYTE, dst);
+            readback_enqueue_ms += readback_clock_ms() - enqueue_start;
+        }
+        error = glGetError();
+        copied = error == GL_NO_ERROR;
+    }
+
+    /* Queue this frame into the slot just consumed. Steady-state swaps keep
+     * the GPU overlap; explicit reads retain their immediate contract. */
+    if (asynchronous) {
         int pbo = readback_pbo_next;
         if (!readback_pbos[pbo]) {
             glGenBuffers(1, &readback_pbos[pbo]);
-            if (!readback_pbos[pbo]) return 0;
         }
-        glBindBuffer(GL_PIXEL_PACK_BUFFER, readback_pbos[pbo]);
-        glBufferData(GL_PIXEL_PACK_BUFFER, pbo_size, NULL, GL_STREAM_READ);
-        glBindFramebuffer(GL_READ_FRAMEBUFFER, framebuffer_get(entry->target.texture, 0));
-        glReadPixels(0, 0, (GLsizei)description.width, (GLsizei)description.height,
-                     GL_BGRA, GL_UNSIGNED_BYTE, (void *)0);
-        if (glGetError() != GL_NO_ERROR) error = GL_INVALID_OPERATION;
-        readback_pending[pbo].valid = 1;
-        readback_pending[pbo].width = description.width;
-        readback_pending[pbo].height = description.height;
-        readback_pending[pbo].pitch = description.pitch;
+        if (readback_pbos[pbo]) {
+            glBindBuffer(GL_PIXEL_PACK_BUFFER, readback_pbos[pbo]);
+            glBufferData(GL_PIXEL_PACK_BUFFER, pbo_size, NULL, GL_STREAM_READ);
+            {
+                double enqueue_start = readback_clock_ms();
+                glReadPixels(read_x, 0, (GLsizei)description.width, (GLsizei)description.height,
+                             GL_BGRA, GL_UNSIGNED_BYTE, (void *)0);
+                readback_enqueue_ms += readback_clock_ms() - enqueue_start;
+            }
+            readback_pending[pbo].valid = glGetError() == GL_NO_ERROR;
+            readback_pending[pbo].width = description.width;
+            readback_pending[pbo].height = description.height;
+            readback_pending[pbo].pitch = description.pitch;
+        } else {
+            /* Allocation failure leaves the successful synchronous copy
+             * usable, while future swaps retry without losing GL state. */
+            glGetError();
+            readback_pending[pbo].valid = 0;
+        }
         readback_pbo_next = (pbo + 1) % READBACK_PBO_COUNT;
         glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
     }
@@ -7305,7 +7809,54 @@ int noble_d3d8_readback_host(D3DSurface *surface)
     glPixelStorei(GL_PACK_SKIP_ROWS, skip_rows);
     glPixelStorei(GL_PACK_SKIP_PIXELS, skip_pixels);
     xgpu_gl_state_invalidate();
-    return error == GL_NO_ERROR;
+    readback_frames++;
+    static int readback_stats_enabled = -1;
+    if (readback_stats_enabled < 0)
+        readback_stats_enabled = getenv("RECOMP_READBACK_STATS") != NULL;
+    if (readback_frames >= 120 && readback_stats_enabled) {
+        static unsigned long long trace_calls, trace_bytes, trace_ns;
+        static unsigned long trace_tid;
+        Uint64 trace_start_ns, trace_end_ns;
+        int trace_io = getenv("RECOMP_IO_TRACE") != NULL;
+        char line[256];
+        int line_len;
+        if (trace_io)
+            trace_start_ns = SDL_GetTicksNS();
+        line_len = snprintf(line, sizeof(line),
+                "[READBACK-PERF] frames=%llu map=%.3f copy=%.3f enqueue=%.3f ms/frame\n",
+                readback_frames,
+                readback_map_ms / readback_frames,
+                readback_copy_ms / readback_frames,
+                readback_enqueue_ms / readback_frames);
+        if (line_len > 0) {
+            fwrite(line, 1, (size_t)line_len, stderr);
+            fflush(stderr);
+        }
+        if (trace_io) {
+            trace_end_ns = SDL_GetTicksNS();
+            trace_tid = (unsigned long)SDL_GetCurrentThreadID();
+            trace_calls++;
+            if (line_len > 0) trace_bytes += (unsigned long long)line_len;
+            trace_ns += (unsigned long long)(trace_end_ns - trace_start_ns);
+            if ((trace_calls & 0x7ffu) == 0)
+                fprintf(stderr,
+                    "[IO-TRACE] source=readback_host tid=%lu dest=stderr "
+                    "calls=%llu bytes=%llu elapsed_us=%.3f\n",
+                    (unsigned long)trace_tid, trace_calls, trace_bytes,
+                    (double)trace_ns / 1000.0);
+        }
+    }
+    return copied && error == GL_NO_ERROR;
+}
+
+int noble_d3d8_readback_host(D3DSurface *surface)
+{
+    return readback_host(surface, 0);
+}
+
+int noble_d3d8_readback_swap_host(D3DSurface *surface)
+{
+    return readback_host(surface, 1);
 }
 
 /* Host-only presentation owns private boot surfaces. Once the guest starts

@@ -1,0 +1,16 @@
+{
+  "name": "moai",
+  "after": "newgame.json",
+  "note": "The Lament of Innocence bonus (src/game/hooks.cpp): a walk recorded from the courtyard back across the bridge to the far end of 5.0 (routes/moai.json, short of the potion there), then to the left of it, where the Moai floats with the setting on (--set lament_save=true) and nothing does without it; the pickup's notice says which.",
+  "steps": [
+    {"route": "moai", "shot": "far-end", "expect": ["map == 5 and room == 0"]},
+    {"press": "0:walk=-21400/-2900/80:6000", "shot": "moai-ahead", "note": "facing where the Moai floats, some way off",
+     "ask": {"question": "Is there an item floating in the air near Hector, shaped like a stone Moai head (an Easter Island statue)?",
+             "choices": {"moai": "yes, a stone Moai head floats near him", "none": "no such item"}},
+     "expect": ["screen.ask.answer == ('moai' if settings.lament_save else 'none')"]},
+    {"press": "0:walk=-23726/-2396/80:6000", "shot": "picked", "note": "over the spot: the pickup's notice",
+     "ask": {"question": "Is there an item pickup notice on the screen (a small framed label at the bottom with an item's name)? Which item?",
+             "choices": {"moai": "a notice reading Moai", "potion": "a notice reading Potion", "none": "no pickup notice"}},
+     "expect": ["screen.ask.answer == ('moai' if settings.lament_save else 'none')"]}
+  ]
+}

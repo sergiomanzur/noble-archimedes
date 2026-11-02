@@ -1,0 +1,22 @@
+{
+  "name": "bot",
+  "after": "newgame.json",
+  "note": "The bot (src/common/bot.cpp): walks to points around the first courtyard through its camera cuts, then fights the armoured knights of room 5.12.",
+  "steps": [
+    {"press": "0:walk=-5000/-4300:8000", "shot": "walk-north", "expect": ["bot.results == ['reached']"]},
+    {"press": "0:walk=-5600/-4900:8000", "shot": "walk-west", "expect": ["bot.results == ['reached']"]},
+    {"press": "0:walk=-5000/-5500:8000", "shot": "walk-south", "expect": ["bot.results == ['reached']"]},
+    {"press": "0:walk=-5000/-4900/80:8000", "shot": "walk-back", "expect": ["bot.results == ['reached']", "abs(player.pos[0] + 5000) < 80"]},
+    {"press": "0:warp=5.12,10f:wait:20f"},
+    {"until": "room == 12 and player.active and not loading and not cutscene", "timeout": 30,
+     "poll_by": [["cutscene", "0:start,45f:wait"], ["menu", "0:b,30f:wait"]]},
+    {"press": "0f:wait:30f", "shot": "knights", "expect": ["len(enemies) > 0"]},
+    {"press": "0:heal,0:fight:20000", "shot": "fight-1"},
+    {"press": "0:heal,0:fight:20000", "shot": "fight-2"},
+    {"press": "0:heal,0:fight:20000", "shot": "fight-3"},
+    {"press": "0:heal,0:fight:20000", "shot": "fight-4", "expect": ["player.exp > 0", "bot.results != ['stuck']"]},
+    {"until": "not modal", "poll": "60f:wait", "timeout": 6, "shot": "level-up",
+     "note": "the level up's box (scene 0x30C10000) after the kills goes by itself in ~2 s",
+     "expect": ["not menu", "player.active", "player.hp_max > 100"]}
+  ]
+}

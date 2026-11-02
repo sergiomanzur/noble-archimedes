@@ -1,0 +1,94 @@
+{
+  "name": "buttons",
+  "after": "newgame.json",
+  "note": "The button icons, asked of the AI judge: Hector at the courtyard door (no icon there, its arrows turn green) and the controller settings page. Xbox icons by default; --set button_layout=1 for the PS2 ones (from an HD pack made from the PS2 game).",
+  "steps": [
+    {
+      "press": "0:walk=-5165/-4876/120:8000",
+      "note": "to the door, the way the first-save recording went"
+    },
+    {
+      "press": "0:walk=-5441/-4703/120:8000"
+    },
+    {
+      "press": "0:walk=-5914/-4643/120:8000"
+    },
+    {
+      "press": "0:walk=-6203/-4479/120:8000"
+    },
+    {
+      "press": "0:walk=-6616/-4401/120:8000"
+    },
+    {
+      "press": "0:walk=-8175/-3360/120:10000"
+    },
+    {
+      "press": "0:walk=-8311/-3047/120:8000"
+    },
+    {
+      "press": "0:walk=-8230/-2613/120:8000"
+    },
+    {
+      "press": "0:walk=-7865/-2078/120:8000"
+    },
+    {
+      "press": "0:walk=-7583/-1904/120:8000"
+    },
+    {
+      "press": "0:walk=-6756/-1656/120:8000"
+    },
+    {
+      "press": "0:walk=-5420/-660/120:10000"
+    },
+    {
+      "press": "0:walk=-5250/-360/60:8000"
+    },
+    {
+      "press": "0:walk=-4979/-306/40:8000,0f:wait:30f",
+      "shot": "door",
+      "note": "the door: its arrows turn green this close, no button is shown for it",
+      "ask": {
+        "question": "Is there a controller button icon on the screen, for instance a prompt to open the door, and which controller is it from?",
+        "choices": {
+          "xbox": "an Xbox button: a coloured ball with a letter (A green, B red, X blue, Y yellow), an L or R trigger box, or a white or black round button",
+          "playstation": "a PlayStation button: a circle, cross, square or triangle symbol, or an L1, L2, R1 or R2 label",
+          "none": "no controller button icon"
+        }
+      },
+      "expect": [
+        "map == 5 and room == 1",
+        "screen.ask.answer == 'none'"
+      ]
+    },
+    {
+      "press": "0:start,1500:wait",
+      "shot": "pause",
+      "expect": [
+        "menu"
+      ]
+    },
+    {
+      "press": "0:up,800:wait",
+      "shot": "pause-up"
+    },
+    {
+      "press": "0:a,2000:wait",
+      "shot": "options"
+    },
+    {
+      "press": "0:a,2500:wait",
+      "shot": "controller-config",
+      "ask": {
+        "question": "Which controller's button icons does the screen show beside the actions?",
+        "choices": {
+          "xbox": "an Xbox button: a coloured ball with a letter (A green, B red, X blue, Y yellow), an L or R trigger box, or a white or black round button",
+          "playstation": "a PlayStation button: a circle, cross, square or triangle symbol, or an L1, L2, R1 or R2 label",
+          "none": "no controller button icon"
+        }
+      },
+      "expect": [
+        "screen.ask.answer == ('playstation' if settings.button_layout == 1 else 'xbox')"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,13 @@
+{
+  "name": "crazy",
+  "note": "A fresh start, the game never beaten: New Game named @CRAZY (typed on the name screen's letters), a new save, the movies skipped, then Hector in Crazy mode in the first courtyard (hooks.cpp: the name codes).",
+  "steps": [
+    {"press": "0:wait:11000", "shot": "title"},
+    {"press": "1000:a,3800:wait", "shot": "name-screen"},
+    {"press": "4000:right,4300:right,4600:right,4900:right,5200:right,5500:right,5800:down,6100:down,6400:down,6700:down,7000:down,7500:a,8100:left,8400:left,8700:left,9000:left,9300:up,9600:up,9900:up,10200:up,10500:up,11000:a,11600:right,11900:down,12400:a,13000:left,13300:left,13600:left,13900:up,14400:a,15000:right,15300:right,15600:right,15900:right,16200:right,16500:right,16800:right,17100:right,17400:right,17700:right,18000:right,18300:down,18800:a,19400:left,19900:a,20700:wait", "shot": "name-typed", "note": "@CRAZY typed"},
+    {"press": "0:start,1000:a,3000:a,7000:left,8000:a,12000:a,15000:a,18000:a,30500:start,35000:start,36000:wait", "shot": "after-movies", "expect": ["name == '@CRAZY'", "mode == 1"], "note": "accept the name, create the save, skip the movies"},
+    {"until": "player.active and camera.special == False and not cutscene and not loading and not menu", "timeout": 90, "poll_by": [["cutscene", "0:start,45f:wait"], ["menu", "0:b,30f:wait"]], "shot": "gameplay"},
+    {"press": "0f:wait:60f", "shot": "stand", "expect": ["mode == 1", "map == 5", "not screen.flat"]},
+    {"press": "0f:lsu:60f", "shot": "walk-up", "expect": ["player.pos[2] - prev.player.pos[2] > 300"]}
+  ]
+}

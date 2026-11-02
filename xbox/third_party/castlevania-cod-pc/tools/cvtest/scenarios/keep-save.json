@@ -1,0 +1,8 @@
+{
+  "name": "keep-save",
+  "after": "first-save.json",
+  "note": "first-save.json, its saves kept as first-save for load-save.json: play this on one release and load-save on the other (--release eu) to see a save carry over",
+  "steps": [
+    {"press": "0f:wait:30f", "shot": "kept", "save_as": "first-save"}
+  ]
+}

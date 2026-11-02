@@ -1,53 +1,40 @@
-cmake_minimum_required(VERSION 3.21)
+cmake_minimum_required(VERSION 3.25)
 
-project(NobleArchimedes LANGUAGES C CXX)
-
-set(CMAKE_CXX_STANDARD 20)
-set(CMAKE_CXX_STANDARD_REQUIRED ON)
-set(CMAKE_C_STANDARD 99)
-set(CMAKE_C_STANDARD_REQUIRED ON)
-
-if(MSVC)
-    add_compile_options(/O2 /arch:AVX2 /W3 /MP)
-else()
-    add_compile_options(-O3 -msse4.1 -mavx2 -mfma -Wall -Wno-unused-variable -Wno-unused-function)
+option(NOBLE_EXPERIMENTAL_PS2 "Build the experimental PS2 host instead of the primary Xbox host" OFF)
+if(NOBLE_EXPERIMENTAL_PS2)
+    include(cmake/ExperimentalPS2.cmake)
+    return()
 endif()
 
-# Build PS2Recomp tools and runtime
-set(PS2X_BUILD_RECOMP ON CACHE BOOL "" FORCE)
-set(PS2X_BUILD_RUNTIME ON CACHE BOOL "" FORCE)
-set(PS2X_BUILD_ANALYZER ON CACHE BOOL "" FORCE)
-set(PS2X_BUILD_TEST OFF CACHE BOOL "" FORCE)
-set(PS2X_BUILD_STUDIO OFF CACHE BOOL "" FORCE)
-
-add_subdirectory(tools/PS2Recomp)
-
-# Main Native Application
-set(NOBLE_APP_SOURCES
-    src/main.cpp
-    src/recomp/sound_bank_compat.cpp
-    src/render/renderer_settings.cpp
-    src/platform/host_timer_resolution.cpp
-)
-
-add_executable(NobleArchimedes ${NOBLE_APP_SOURCES})
-
-target_include_directories(NobleArchimedes PRIVATE
-    tools/PS2Recomp/ps2xRuntime/include
-    tools/PS2Recomp/ps2xRuntime/src/lib/Kernel
-    tools/PS2Recomp/ps2xIOP/include
-    src/recomp/generated
-    src/recomp/chunks
-)
-
-target_link_libraries(NobleArchimedes PRIVATE
-    ps2_runtime
-    ps2_iop
-    raylib
-    imgui
-    rlImGui
-)
-
-target_compile_definitions(NobleArchimedes PRIVATE
-    PS2X_ENABLE_DEBUG_UI=1
-)
+project(NobleArchimedesXbox VERSION 0.9.0 LANGUAGES NONE)
+find_package(Python3 REQUIRED COMPONENTS Interpreter)
+include(CTest)
+if(BUILD_TESTING)
+    foreach(test_file test_jmafort_backend.py test_imported_game_state.py test_noble_integration.py test_noble_launcher.py)
+        add_test(NAME ${test_file}
+            COMMAND ${Python3_EXECUTABLE} -m unittest discover
+                -s "${CMAKE_CURRENT_SOURCE_DIR}/xbox/tests" -p ${test_file})
+    endforeach()
+    add_test(NAME original-launcher-music
+        COMMAND ${Python3_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_brand_music.py")
+    add_test(NAME release-package
+        COMMAND ${Python3_EXECUTABLE} -m unittest discover
+            -s "${CMAKE_CURRENT_SOURCE_DIR}/tests" -p test_noble_release.py)
+endif()
+set(NOBLE_GAME_ASSETS "${CMAKE_CURRENT_SOURCE_DIR}/extracted" CACHE PATH "User-owned extracted USA Xbox game")
+set(NOBLE_EU_ASSETS "" CACHE PATH "Optional user-owned extracted European Xbox game")
+option(NOBLE_BUILD_GAME_DLL "Build translated game DLL locally instead of on first launch" ON)
+set(NOBLE_BUILD_JOBS 4 CACHE STRING "Parallel compilation jobs for the Xbox host")
+set(noble_arguments --build --assets "${NOBLE_GAME_ASSETS}" --jobs "${NOBLE_BUILD_JOBS}")
+if(NOBLE_EU_ASSETS)
+    list(APPEND noble_arguments --eu-assets "${NOBLE_EU_ASSETS}")
+endif()
+if(NOBLE_BUILD_GAME_DLL)
+    list(APPEND noble_arguments --full-game)
+endif()
+add_custom_target(NobleArchimedes ALL
+    COMMAND ${Python3_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/xbox/tools/jmafort_backend.py" ${noble_arguments}
+    WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+    USES_TERMINAL VERBATIM)
+message(STATUS "Primary Xbox build: supply your own game in ${NOBLE_GAME_ASSETS}")
+message(STATUS "PS2 research remains available with -DNOBLE_EXPERIMENTAL_PS2=ON")

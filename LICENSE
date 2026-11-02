@@ -1,0 +1,55 @@
+Noble Archimedes — license and scope
+====================================
+
+Copyright (c) 2026 Noble Archimedes contributors.
+
+You may fork, use, modify and redistribute this project's source under the
+applicable licenses below, including for commercial purposes, subject to their
+conditions. There is no additional noncommercial restriction on project code.
+
+Project-authored source, build tools, tests and documentation are licensed at
+your option under either:
+
+    GNU General Public License version 2 only (GPL-2.0-only), OR
+    GNU General Public License version 3 or any later version (GPL-3.0-or-later).
+
+SPDX-License-Identifier: GPL-2.0-only OR GPL-3.0-or-later
+
+The following scoped exceptions take precedence over that default:
+
+* The primary Xbox port's imported and adapted GPLv2 source remains
+  GPL-2.0-only. In particular, xbox/third_party/castlevania-cod-pc is governed
+  by its own LICENSE and README, and xbox/tools/imported_game_state.py and
+  xbox/tools/imported_game_profiles.json retain the donor's GPLv2 terms.
+  The donor's sdk-patches/ is an explicit MIT exception made by its author;
+  preserve its copyright and MIT terms. This default does not relicense any
+  upstream code or grant a GPLv3 option for the GPLv2-only donor.
+* The experimental PS2 host in src/, PS2-specific runtime patches in patches/,
+  and modifications derived from PS2Recomp or PCSX2 are GPL-3.0-or-later for
+  project-authored contributions. Upstream terms and more specific notices
+  still apply. No GPLv2 option is granted for GPLv3-derived material.
+* Original Noble Archimedes branding art, icons, and synthetic audio in
+  assets/noble/ are dedicated under CC0-1.0 to the extent the contributors
+  hold rights in them. Source generators remain under the code default
+  unless explicitly marked otherwise. Game-derived content and third-party
+  assets are excluded from this dedication.
+* Submodules, vendor/third_party trees, external dependencies and copied or
+  adapted upstream code retain their own licenses and copyright notices,
+  wherever located. This includes tools/PS2Recomp, tools/xboxrecomp,
+  tools/rea, Xbox runtime copies and the borrowed Halo renderer material
+  in xbox/src/d3d8gl/. File-level notices override the project default.
+
+Full texts: licenses/GPL-2.0.txt, licenses/GPL-3.0.md, licenses/CC0-1.0.txt
+and licenses/XboxXBE-Recomp-MIT.txt (the TGP482 SDK/patch MIT notice).
+Read docs/LICENSING.md and THIRD_PARTY_NOTICES.md for provenance, build boundaries
+and redistribution guidance. Retain this scope notice with forks.
+
+The GPLv2 Xbox program and GPLv3 PS2 program are separate works/executables.
+Do not combine GPLv2-only donor source with GPLv3-only code in one program.
+Choosing a license for original shared code does not change dependency terms.
+
+No license is granted to Castlevania, disc images, original game executables,
+textures, music, game-derived generated code, saves or other game content.
+Names and trademarks remain their respective owners' property; no endorsement
+or trademark permission is granted. All licensed material is provided without
+warranty, as detailed in the applicable licenses.

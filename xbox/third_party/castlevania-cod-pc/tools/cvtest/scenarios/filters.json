@@ -1,0 +1,32 @@
+{
+  "name": "filters",
+  "after": "newgame.json",
+  "note": "Render scale and anisotropic filtering change the picture, with the HD pack (the default) and without it (--set texture_pack=false; the pack is read at the start only). Hector stands at the end of the drawbridge (5.0), whose deck and walls run away from the camera, while each setting is changed live, as the in-game menu changes it (set=), and the edge strength of the deck and walls near and far is measured. On 2026-10-31, with the pack: 50% halved it, 200% added two fifths, 4x and 16x filtering a half to four fifths (the pack's pictures have mip levels, which blur with distance until filtered). Without it: 50% took away nearly half, while 200% and filtering took a tenth to a third of it away, as the game's textures have no mip levels and shimmer with distance, which supersampling and filtering smooth. Two shots with the same settings are the same, and filtering off brings the first back.",
+  "settings": {"width": 1600, "height": 900},
+  "steps": [
+    {"press": "0:warp=5.0,10f:wait:20f", "note": "the drawbridge"},
+    {"until": "room == 0 and player.active and not loading", "timeout": 40},
+    {"press": "0f:wait:120f", "shot": "base", "measure": {"near": [0.075, 0.222, 0.4, 0.522], "far": [0.25, 0.205, 0.75, 0.33]}},
+    {"press": "0f:wait:40f", "shot": "again", "measure": {"near": [0.075, 0.222, 0.4, 0.522], "far": [0.25, 0.205, 0.75, 0.33]},
+     "note": "the same settings: the same picture",
+     "expect": ["abs(screen.edges.near / shots['base'].edges.near - 1) < 0.05",
+                "abs(screen.edges.far / shots['base'].edges.far - 1) < 0.05"]},
+    {"press": "0:set=render_percent=50,0f:wait:40f", "shot": "scale-50", "measure": {"near": [0.075, 0.222, 0.4, 0.522], "far": [0.25, 0.205, 0.75, 0.33]},
+     "expect": ["screen.edges.near < shots['base'].edges.near * 0.75",
+                "screen.edges.far < shots['base'].edges.far * 0.75"]},
+    {"press": "0:set=render_percent=200,0f:wait:40f", "shot": "scale-200", "measure": {"near": [0.075, 0.222, 0.4, 0.522], "far": [0.25, 0.205, 0.75, 0.33]},
+     "note": "sharper with the pack; without it, less shimmer",
+     "expect": ["screen.edges.near > shots['base'].edges.near * 1.2 if settings.texture_pack else screen.edges.near < shots['base'].edges.near * 0.96",
+                "screen.edges.far > shots['base'].edges.far * 1.2 if settings.texture_pack else screen.edges.far < shots['base'].edges.far * 0.96"]},
+    {"press": "0:set=render_percent=100,0:set=anisotropic_filtering=16,0f:wait:40f", "shot": "aniso-16", "measure": {"near": [0.075, 0.222, 0.4, 0.522], "far": [0.25, 0.205, 0.75, 0.33]},
+     "note": "sharper with the pack; without it, less shimmer",
+     "expect": ["screen.edges.near > shots['base'].edges.near * 1.3 if settings.texture_pack else screen.edges.near < shots['base'].edges.near * 0.9",
+                "screen.edges.far > shots['base'].edges.far * 1.3 if settings.texture_pack else screen.edges.far < shots['base'].edges.far * 0.85"]},
+    {"press": "0:set=anisotropic_filtering=4,0f:wait:40f", "shot": "aniso-4", "measure": {"near": [0.075, 0.222, 0.4, 0.522], "far": [0.25, 0.205, 0.75, 0.33]},
+     "expect": ["screen.edges.far > shots['base'].edges.far * 1.3 if settings.texture_pack else screen.edges.far < shots['base'].edges.far * 0.9"]},
+    {"press": "0:set=anisotropic_filtering=0,0f:wait:40f", "shot": "aniso-off", "measure": {"near": [0.075, 0.222, 0.4, 0.522], "far": [0.25, 0.205, 0.75, 0.33]},
+     "note": "off again: the first picture back",
+     "expect": ["abs(screen.edges.near / shots['base'].edges.near - 1) < 0.05",
+                "abs(screen.edges.far / shots['base'].edges.far - 1) < 0.05"]}
+  ]
+}

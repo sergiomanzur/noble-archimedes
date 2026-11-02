@@ -9,9 +9,11 @@ for %%f in (d3d8_gl d3d8_resources nv2a_vsh nv2a_psh xbox_textures xgpu_text gl_
   clang-cl %COMMON% /Foxbox\src\d3d8gl\%%f.obj xbox\src\d3d8gl\%%f.c
   if errorlevel 1 exit /b 1
 )
+clang-cl /nologo /c /std:c11 /D_CRT_SECURE_NO_WARNINGS /Foxbox\src\d3d8gl\page_watch_win.obj xbox\src\d3d8gl\page_watch_win.c
+if errorlevel 1 exit /b 1
 clang-cl /nologo /c /std:c11 /Ioutput\OpenCE\port\windows\include /Ioutput\OpenCE\port\windows\include\posix /Ioutput\OpenCE\port\windows\include\crt /Foxbox\src\d3d8gl\win32_posix.obj output\OpenCE\port\windows\src\win32_posix.c
 if errorlevel 1 exit /b 1
-set OBJECTS=xbox\src\d3d8gl\d3d8_gl.obj xbox\src\d3d8gl\d3d8_resources.obj xbox\src\d3d8gl\nv2a_vsh.obj xbox\src\d3d8gl\nv2a_psh.obj xbox\src\d3d8gl\xbox_textures.obj xbox\src\d3d8gl\xgpu_text.obj xbox\src\d3d8gl\gl_functions.obj xbox\src\d3d8gl\stubs.obj xbox\src\d3d8gl\hires_stubs.obj xbox\src\d3d8gl\exports.obj xbox\src\d3d8gl\win32_posix.obj
+set OBJECTS=xbox\src\d3d8gl\d3d8_gl.obj xbox\src\d3d8gl\d3d8_resources.obj xbox\src\d3d8gl\nv2a_vsh.obj xbox\src\d3d8gl\nv2a_psh.obj xbox\src\d3d8gl\xbox_textures.obj xbox\src\d3d8gl\xgpu_text.obj xbox\src\d3d8gl\gl_functions.obj xbox\src\d3d8gl\stubs.obj xbox\src\d3d8gl\hires_stubs.obj xbox\src\d3d8gl\exports.obj xbox\src\d3d8gl\win32_posix.obj xbox\src\d3d8gl\page_watch_win.obj
 set LIBS=output\sdl3\SDL3-3.4.18\lib\x64\SDL3.lib opengl32.lib user32.lib gdi32.lib winmm.lib
 link /nologo /DEBUG /INCREMENTAL:NO /MAP:output\d3d8gl.map /PDB:output\d3d8gl.pdb /DLL /OUT:output\d3d8gl.dll %OBJECTS% %LIBS%
 if errorlevel 1 exit /b 1
@@ -21,6 +23,22 @@ if /i "%~1"=="test" (
   link /nologo /SUBSYSTEM:CONSOLE /OUT:output\d3d8gl_abi_test.exe xbox\src\d3d8gl\d3d8gl_abi_test.obj %OBJECTS% %LIBS%
   if errorlevel 1 exit /b 1
   output\d3d8gl_abi_test.exe
+  if errorlevel 1 exit /b 1
+)
+if /i "%~1"=="manifest-test" (
+  clang-cl /nologo /c /std:c11 /D_CRT_SECURE_NO_WARNINGS /Foxbox\tests\texture_manifest_test.obj xbox\tests\texture_manifest_test.c
+  if errorlevel 1 exit /b 1
+  link /nologo /SUBSYSTEM:CONSOLE /OUT:output\texture_manifest_test.exe xbox\tests\texture_manifest_test.obj user32.lib
+  if errorlevel 1 exit /b 1
+  output\texture_manifest_test.exe
+  if errorlevel 1 exit /b 1
+)
+if /i "%~1"=="texture-test" (
+  clang-cl /nologo /c /std:c11 /D_CRT_SECURE_NO_WARNINGS /Foxbox\src\d3d8gl\texture_version_test.obj xbox\tests\texture_version_test.c
+  if errorlevel 1 exit /b 1
+  link /nologo /SUBSYSTEM:CONSOLE /OUT:output\texture_version_test.exe xbox\src\d3d8gl\texture_version_test.obj xbox\src\d3d8gl\page_watch_win.obj %LIBS%
+  if errorlevel 1 exit /b 1
+  output\texture_version_test.exe
   if errorlevel 1 exit /b 1
 )
 if /i "%~1"=="gpu-test" (

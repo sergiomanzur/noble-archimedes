@@ -1,5 +1,18 @@
 # Changelog
 
+## v0.9.0b — Xbox-first Noble Archimedes beta (2026-11-02)
+
+- Make the native x64 original Xbox recompilation the primary Windows build, using Direct3D 12 and XAudio2. Keep the PS2 host and older Xbox renderer research explicitly experimental.
+- Integrate jmafort/CastlevaniaCOD-PC at `1d9edf6b2bdbb683cb95dff5b317916aec31db84`, retaining its pristine source, credits and licenses. Pin the separately patched Xbox XBE Recomp SDK at `91146ff6e2a218b19c1109dc665d06020472ab57`.
+- Include widescreen/menu and shadow fixes, shader cache, filtering, render scaling, game options, PCSX2-format PNG/DDS HD texture-pack loading, and region-specific USA/EU source configurations.
+- Introduce the Noble Archimedes launcher with original observatory artwork, astrolabe icon and the original looping theme **The Quiet Orrery**, with a persisted music toggle. Retain GPU checks, game-file selection and display/game/language settings.
+- Align executable, generated game DLL, import-library and first-run compiler names under `NobleArchimedes*`. Add the main build/launch shortcuts and a guarded, repeatable source overlay.
+- Add scoped open-source licensing and fork/build guidance, preserving GPLv2 Xbox, GPLv3 PS2 and MIT upstream terms. Dedicate original branding assets under CC0 to the extent rights are held.
+- Supply a source-free runtime package: bring your own USA Xbox disc image or extracted files. The runtime generates its game DLL locally; no game files, generated implementation, HD packs or game audio/art are included. The original project-owned branding is included.
+- Validate the branded USA build with 30 focused checks, 7/7 new-game/movement/menu steps, and an isolated first-run test passing 8/8 startup/gameplay steps. The latter generated its DLL from the local XBE in about 85 seconds and sampled about 59.4 FPS in the courtyard. The actual source-free runtime ZIP additionally passed 9/9 installation/startup/gameplay checks outside the source tree, including dependency closure and game-DLL compilation.
+- This beta's downloadable runtime is USA-only. European source support is retained, but no EU input was available to build/qualify an EU binary. HD packs, a complete playthrough and clean-Windows installation are not qualified by the recorded local tests.
+
+
 ## D3D8 HLE async swap readback and true-backend benchmark (2026-10-21)
 
 - Swap readback now uses a two-entry PBO ring: the previous frame is mapped

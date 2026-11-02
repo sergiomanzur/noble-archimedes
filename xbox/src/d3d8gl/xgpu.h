@@ -52,6 +52,29 @@ void xgpu_gl_state_invalidate(void);
 /* a texture about to be deleted: the binding shadows forget it, since GL
 may give its name to a new texture (call before glDeleteTextures) */
 void xgpu_gl_texture_deleted(unsigned int texture);
+/* an upload has bound a texture on target to the current unit (glBindTexture):
+only that target's binding shadows are stale. Everything else the shadow
+tracks (program, targets, raster state, vertex array and buffers) is what it
+was, and sending it again at the next draw would be redundant work. */
+void xgpu_gl_texture_binding_invalidated(GLenum target);
+
+/* Test hooks (xbox/tests/d3d8gl_draw_test.c): what the GL state shadow still
+knows after draws and narrow invalidations, and which invalidation path ran.
+The renderer does not use them; they exist so the narrow invalidation contract
+can be checked against real GL state. */
+enum noble_gl_shadow_probe
+{
+	_noble_gl_shadow_program,
+	_noble_gl_shadow_framebuffer,
+	_noble_gl_shadow_raster,
+	_noble_gl_shadow_vertex_array,
+	_noble_gl_shadow_array_buffer,
+	_noble_gl_shadow_attribute_value, /* index passed as unit */
+	_noble_gl_shadow_texture_binding, /* unit and slot */
+	_noble_gl_shadow_full_invalidations,
+	_noble_gl_shadow_binding_invalidations /* slot */
+};
+long noble_d3d8_gl_shadow_probe(int what, int unit, int slot);
 
 /* a compiled shader, or a linked program of two, or 0 with the log
 written */

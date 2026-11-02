@@ -1,0 +1,18 @@
+{
+  "name": "newgame",
+  "note": "A fresh start: title, New Game as AAA, a new save, the opening movies skipped, then Hector in the first courtyard: standing, walking, the pause menu.",
+  "steps": [
+    {"press": "0:wait:11000", "shot": "title", "expect": ["not player.active", "not screen.flat"]},
+    {"press": "1000:a,4000:a,4600:a,5200:a,6000:start,7000:a,9000:a,13000:left,14000:a,18000:a,21000:a,24000:a,36500:start,41000:start,42000:wait",
+     "shot": "after-movies", "note": "New Game, name AAA, create the save, skip the movies"},
+    {"until": "player.active and camera.special == False and not cutscene and not loading and not menu", "timeout": 90,
+     "poll_by": [["cutscene", "0:start,45f:wait"], ["menu", "0:b,30f:wait"]],
+     "shot": "gameplay", "note": "the opening scenes the timed presses missed are skipped with Start"},
+    {"press": "0f:wait:60f", "shot": "stand",
+     "expect": ["map == 5", "mode == 0", "player.hp == player.hp_max == 100", "player.exp == 0", "not menu", "not modal",
+                "not screen.flat", "step.fps > 50"]},
+    {"press": "0f:lsu:60f", "shot": "walk-up", "expect": ["player.pos[2] - prev.player.pos[2] > 300"]},
+    {"press": "0:start,1500:wait", "shot": "menu", "expect": ["menu"]},
+    {"press": "0:b,1500:wait", "shot": "back", "expect": ["not menu", "player.active"]}
+  ]
+}

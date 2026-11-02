@@ -1,5 +1,6 @@
 /* Real GL integration: synthetic resources, no game or benchmark process. */
 #include "platform.h"
+#include "xgpu.h"
 #include <assert.h>
 int noble_d3d8_init(void);
 void noble_d3d8_set_guest_offset(ptrdiff_t);
@@ -18,6 +19,7 @@ void noble_d3d8_draw_up(unsigned, unsigned, unsigned, unsigned);
 void noble_d3d8_draw_indexed_up(unsigned, unsigned, unsigned, unsigned, unsigned);
 void noble_d3d8_clear(unsigned, unsigned, unsigned, unsigned, float, unsigned);
 int noble_d3d8_readback(unsigned);
+int noble_d3d8_readback_swap(unsigned);
 void d3d8_surface_initialize(D3DSurface *, D3DFORMAT, unsigned long, unsigned long);
 typedef struct { float x,y,z,rhw; DWORD color; float u,v; } ScreenVertex;
 typedef struct { float x,y,z; DWORD color; float u,v; } WorldVertex;
@@ -97,7 +99,43 @@ int main(void)
     /* Same address, same frame: exact dirty tracking must upload new bytes. */
     texels[0]=texels[1]=texels[16]=texels[17]=0xFFFF00FF;
     noble_d3d8_clear(0,0,D3DCLEAR_TARGET,0xFF000000,1,0);
-    noble_d3d8_draw_indexed_up(D3DPT_QUADLIST,4,guest(indices),guest(screen),sizeof(*screen));
+    {
+        long full_before = noble_d3d8_gl_shadow_probe(_noble_gl_shadow_full_invalidations, 0, 0);
+        long bindings_before = noble_d3d8_gl_shadow_probe(_noble_gl_shadow_binding_invalidations, 0, 0);
+
+        noble_d3d8_draw_indexed_up(D3DPT_QUADLIST,4,guest(indices),guest(screen),sizeof(*screen));
+        /* The upload took the narrow path: it invalidated the 2D bindings, not
+         * the whole GL state shadow (a full reset here would re-send all of it
+         * at the next draw). */
+        assert(noble_d3d8_gl_shadow_probe(_noble_gl_shadow_binding_invalidations, 0, 0) > bindings_before);
+        assert(noble_d3d8_gl_shadow_probe(_noble_gl_shadow_full_invalidations, 0, 0) == full_before);
+        /* The draw that uploaded re-established every other shadow itself, so
+         * the frame after an upload does not pay for them again. */
+        assert(noble_d3d8_gl_shadow_probe(_noble_gl_shadow_program, 0, 0));
+        assert(noble_d3d8_gl_shadow_probe(_noble_gl_shadow_framebuffer, 0, 0));
+        assert(noble_d3d8_gl_shadow_probe(_noble_gl_shadow_raster, 0, 0));
+        assert(noble_d3d8_gl_shadow_probe(_noble_gl_shadow_vertex_array, 0, 0));
+        assert(noble_d3d8_gl_shadow_probe(_noble_gl_shadow_array_buffer, 0, 0));
+        assert(noble_d3d8_gl_shadow_probe(_noble_gl_shadow_attribute_value, 1, 0));
+        assert(noble_d3d8_gl_shadow_probe(_noble_gl_shadow_texture_binding, 0, 0));
+        /* Direct contract: a texture-target invalidation leaves program,
+         * framebuffer, raster, vertex array, buffer and attribute shadows
+         * known, and marks every unit's binding of that target stale. */
+        xgpu_gl_texture_binding_invalidated(GL_TEXTURE_2D);
+        assert(!noble_d3d8_gl_shadow_probe(_noble_gl_shadow_texture_binding, 0, 0));
+        assert(!noble_d3d8_gl_shadow_probe(_noble_gl_shadow_texture_binding, 1, 0));
+        assert(!noble_d3d8_gl_shadow_probe(_noble_gl_shadow_texture_binding, 2, 0));
+        assert(!noble_d3d8_gl_shadow_probe(_noble_gl_shadow_texture_binding, 3, 0));
+        assert(noble_d3d8_gl_shadow_probe(_noble_gl_shadow_program, 0, 0));
+        assert(noble_d3d8_gl_shadow_probe(_noble_gl_shadow_framebuffer, 0, 0));
+        assert(noble_d3d8_gl_shadow_probe(_noble_gl_shadow_raster, 0, 0));
+        assert(noble_d3d8_gl_shadow_probe(_noble_gl_shadow_vertex_array, 0, 0));
+        assert(noble_d3d8_gl_shadow_probe(_noble_gl_shadow_array_buffer, 0, 0));
+        assert(noble_d3d8_gl_shadow_probe(_noble_gl_shadow_attribute_value, 1, 0));
+        /* The next draw rebinds the stale stage and samples the new texels. */
+        noble_d3d8_draw_indexed_up(D3DPT_QUADLIST,4,guest(indices),guest(screen),sizeof(*screen));
+        assert(noble_d3d8_gl_shadow_probe(_noble_gl_shadow_texture_binding, 0, 0));
+    }
     assert(noble_d3d8_readback(guest(surface)));
     check_pixel(surface,0xFF00FF);
     /* A programmable shader may use its own screen-space conversion rather
@@ -199,6 +237,123 @@ int main(void)
             assert(!noble_d3d8_fixed_function(guest(packet),2,0));
         }
     }
-    puts("D3D8GL real GPU FVF triangles, indexed quads and mutable texture readback passed");
+    /* Swap readback may lag by two calls once primed, but a successful cold
+     * read must contain real pixels, and a size transition must never map an
+     * old allocation using the new surface's dimensions or row pitch. */
+    noble_d3d8_render_target(guest(surface),0);
+    noble_d3d8_clear(0,0,D3DCLEAR_TARGET,0xFFFF0000,1,0);
+    assert(noble_d3d8_readback_swap(guest(surface)));
+    check_pixel(surface,0xFF0000);
+    noble_d3d8_clear(0,0,D3DCLEAR_TARGET,0xFF00FF00,1,0);
+    assert(noble_d3d8_readback_swap(guest(surface)));
+    check_pixel(surface,0xFF0000);
+    noble_d3d8_clear(0,0,D3DCLEAR_TARGET,0xFF0000FF,1,0);
+    assert(noble_d3d8_readback_swap(guest(surface)));
+    check_pixel(surface,0x00FF00);
+    noble_d3d8_clear(0,0,D3DCLEAR_TARGET,0xFFFFFFFF,1,0);
+    assert(noble_d3d8_readback_swap(guest(surface)));
+    check_pixel(surface,0x0000FF);
+    {
+        D3DSurface *larger=calloc(1,sizeof(*larger));
+        assert(larger);
+        d3d8_surface_initialize(larger,D3DFMT_LIN_A8R8G8B8,80,80);
+        noble_d3d8_render_target(guest(larger),0);
+        noble_d3d8_clear(0,0,D3DCLEAR_TARGET,0xFF00FFFF,1,0);
+        assert(noble_d3d8_readback_swap(guest(larger)));
+        check_pixel(larger,0x00FFFF);
+        noble_d3d8_render_target(guest(surface),0);
+        noble_d3d8_clear(0,0,D3DCLEAR_TARGET,0xFFFF00FF,1,0);
+        assert(noble_d3d8_readback_swap(guest(surface)));
+        check_pixel(surface,0xFF00FF);
+        /* Explicit readback always means the latest GPU pixels, even while
+         * the swap ring contains earlier frames. */
+        noble_d3d8_clear(0,0,D3DCLEAR_TARGET,0xFF0000FF,1,0);
+        assert(noble_d3d8_readback(guest(surface)));
+        check_pixel(surface,0x0000FF);
+    }
+    if (getenv("RECOMP_WIDE_EXPERIMENT")) {
+        D3DSurface *wide = calloc(1, sizeof(*wide));
+        const unsigned char *data;
+        const unsigned xs[] = {10, 320, 630};
+        assert(wide);
+        d3d8_surface_initialize(wide, D3DFMT_LIN_A8R8G8B8, 640, 480);
+        noble_d3d8_render_target(guest(wide), 0);
+        noble_d3d8_state(D3DRS_ZENABLE, 0);
+        noble_d3d8_state(D3DRS_ALPHABLENDENABLE, 0);
+        noble_d3d8_state(D3DRS_PSTEXTUREMODES, 0);
+        noble_d3d8_state(D3DRS_PSFINALCOMBINERINPUTSABCD, 4);
+        noble_d3d8_state(D3DRS_PSFINALCOMBINERINPUTSEFG, 0x1400);
+        screen[0].x=0; screen[0].y=0; screen[1].x=640; screen[1].y=0;
+        screen[2].x=640; screen[2].y=480; screen[3].x=0; screen[3].y=480;
+        for(i=0;i<4;i++) { screen[i].z=.5f; screen[i].rhw=1; screen[i].color=0xFFFF0000; }
+        noble_d3d8_vertex_shader(0x144);
+        noble_d3d8_clear(0,0,D3DCLEAR_TARGET,0xFF000000,1,0);
+        noble_d3d8_draw_up(D3DPT_QUADLIST,4,guest(screen),sizeof(*screen));
+        assert(noble_d3d8_readback(guest(wide)));
+        data = PLATFORM_PHYSICAL_TO_VIRTUAL(wide->Data);
+        for(i=0;i<3;i++) {
+            DWORD pixel;
+            memcpy(&pixel, data + 240 * 640 * 4 + xs[i] * 4, 4);
+            if ((pixel & 0x00FFFFFFu) != 0xFF0000u) {
+                fprintf(stderr,"wide central readback x=%u: %08lx\n",xs[i],pixel);
+                return 1;
+            }
+        }
+        {
+            D3DSurface *copy = calloc(1, sizeof(*copy));
+            assert(copy);
+            d3d8_surface_initialize(copy, D3DFMT_LIN_A8R8G8B8, 640, 480);
+            assert(noble_d3d8_copy_rects(guest(wide), 0, 0, guest(copy), 0));
+            noble_d3d8_render_target(guest(copy), 0);
+            assert(noble_d3d8_readback(guest(copy)));
+            data = PLATFORM_PHYSICAL_TO_VIRTUAL(copy->Data);
+            for(i=0;i<3;i++) {
+                DWORD pixel;
+                memcpy(&pixel, data + 240 * 640 * 4 + xs[i] * 4, 4);
+                if ((pixel & 0x00FFFFFFu) != 0xFF0000u) {
+                    fprintf(stderr,"wide copied readback x=%u: %08lx\n",xs[i],pixel);
+                    return 1;
+                }
+            }
+            {
+                RECT *rect = calloc(1, sizeof(*rect));
+                NobleD3DPoint *point = calloc(1, sizeof(*point));
+                DWORD left, inside, right;
+                assert(rect && point);
+                rect->left=100; rect->top=0; rect->right=200; rect->bottom=480;
+                point->x=100; point->y=0;
+                noble_d3d8_clear(0,0,D3DCLEAR_TARGET,0xFF000000,1,0);
+                if (!noble_d3d8_copy_rects(guest(wide),guest(rect),1,guest(copy),guest(point)) ||
+                    !noble_d3d8_readback(guest(copy))) { fprintf(stderr,"wide partial copy failed\n"); return 1; }
+                memcpy(&left, data + 240 * 640 * 4 + 50 * 4, 4);
+                memcpy(&inside, data + 240 * 640 * 4 + 150 * 4, 4);
+                memcpy(&right, data + 240 * 640 * 4 + 250 * 4, 4);
+                if ((left & 0xFFFFFF) != 0 || (inside & 0xFFFFFF) != 0xFF0000 || (right & 0xFFFFFF) != 0) {
+                    fprintf(stderr,"wide partial copy: %08lx %08lx %08lx\n",left,inside,right); return 1;
+                }
+                {
+                    D3DSurface *fresh = calloc(1, sizeof(*fresh));
+                    DWORD *pixels;
+                    unsigned j;
+                    assert(fresh);
+                    d3d8_surface_initialize(fresh, D3DFMT_LIN_A8R8G8B8, 640, 480);
+                    pixels = PLATFORM_PHYSICAL_TO_VIRTUAL(fresh->Data);
+                    for(j=0;j<640u*480u;j++) pixels[j]=0xFF00FF00;
+                    if (!noble_d3d8_copy_rects(guest(wide),guest(rect),1,guest(fresh),guest(point))) {
+                        fprintf(stderr,"fresh wide partial copy failed\n"); return 1;
+                    }
+                    noble_d3d8_render_target(guest(fresh), 0);
+                    assert(noble_d3d8_readback(guest(fresh)));
+                    memcpy(&left, pixels + 240*640 + 50, 4);
+                    memcpy(&inside, pixels + 240*640 + 150, 4);
+                    memcpy(&right, pixels + 240*640 + 250, 4);
+                    if ((left & 0xFFFFFF) != 0x00FF00 || (inside & 0xFFFFFF) != 0xFF0000 || (right & 0xFFFFFF) != 0x00FF00) {
+                        fprintf(stderr,"fresh wide partial copy: %08lx %08lx %08lx\n",left,inside,right); return 1;
+                    }
+                }
+            }
+        }
+    }
+    puts("D3D8GL GPU draw, synchronous readback and asynchronous swap readback passed");
     return 0;
 }

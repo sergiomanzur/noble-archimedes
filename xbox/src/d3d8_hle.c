@@ -14,6 +14,25 @@
 
 #include "recomp_types.h"
 #include "d3d8_hle.h"
+extern unsigned recomp_timeline_swap_begin(void);
+extern void recomp_timeline_swap_end(void);
+extern unsigned recomp_timeline_frame(void);
+extern void recomp_timeline_event(const char *kind, const char *detail,
+                                  double value0, double value1);
+extern void recomp_rcap_snapshot(const char *type, uint32_t addr, uint32_t size,
+                                 uint32_t a0, uint32_t a1, uint32_t a2);
+extern void recomp_rcap_state(const char *type, uint32_t a0, uint32_t a1,
+                              uint32_t a2);
+extern void recomp_rcap_sync(const char *name);
+extern void recomp_rcap_unsupported(const char *name);
+extern void recomp_rcap_measure(const char *type, uint32_t addr, uint32_t size);
+extern void recomp_rcap_require(const char *type, uint32_t size);
+extern void recomp_rcap_texture_bind(uint32_t stage, uint32_t resource);
+extern int recomp_rcap_active(void);
+extern void recomp_rcap_renderer_bytes(uint64_t content, uint64_t upload);
+extern void recomp_rcap_texture_frame(uint32_t frame);
+extern uint32_t xbox_FramebufferFlipCount(void);
+extern int recomp_guest_profile_stack(uint32_t *out, int capacity);
 
 typedef int  (*init_fn)(void);
 typedef void (*clear_fn)(unsigned, unsigned, unsigned, unsigned, float, unsigned);
@@ -36,6 +55,16 @@ typedef void (*transform_fn)(unsigned, unsigned);
 typedef void (*draw_up_fn)(unsigned, unsigned, unsigned, unsigned);
 typedef void (*draw_indexed_up_fn)(unsigned, unsigned, unsigned, unsigned, unsigned);
 typedef int (*readback_fn)(unsigned);
+typedef void (*gpu_begin_fn)(void);
+typedef double (*gpu_end_fn)(void);
+typedef void (*shader_stats_fn)(unsigned long *, unsigned long *, unsigned long *);
+typedef int (*gpu_poll_fn)(unsigned long *, double *);
+typedef unsigned long (*texture_bytes_fn)(const uint32_t *resource);
+typedef int (*texture_manifest_fn)(const uint32_t *resource, uint32_t *out);
+typedef void (*texture_stats_fn)(unsigned long long *, unsigned long long *, unsigned long long *, unsigned long long *, unsigned long long *, unsigned long long *, unsigned long long *, unsigned long long *, unsigned long long *, unsigned long long *, unsigned long long *, unsigned long long *, unsigned long long *, unsigned long long *, unsigned long long *);
+typedef unsigned long (*texture_frame_fn)(void);
+typedef void (*upload_stats_fn)(unsigned long long *, unsigned long long *, unsigned long long *, double *);
+typedef void (*readback_stats_fn)(unsigned long long *, double *, double *, double *);
 typedef void (*pair_fn)(unsigned, unsigned);
 typedef void (*vertex2_fn)(unsigned, unsigned, unsigned);
 typedef void (*vertex4_fn)(unsigned, unsigned, unsigned, unsigned, unsigned);
@@ -68,6 +97,17 @@ static transform_fn p_transform;
 static draw_up_fn p_draw_up;
 static draw_indexed_up_fn p_draw_indexed_up;
 static readback_fn p_readback;
+static readback_fn p_readback_swap;
+static gpu_begin_fn p_gpu_frame_begin;
+static gpu_end_fn p_gpu_frame_end;
+static shader_stats_fn p_shader_stats;
+static gpu_poll_fn p_gpu_frame_poll;
+static texture_stats_fn p_texture_stats;
+static texture_bytes_fn p_texture_bytes;
+static texture_manifest_fn p_texture_manifest;
+static texture_frame_fn p_texture_frame;
+static upload_stats_fn p_upload_stats;
+static readback_stats_fn p_readback_stats;
 static vertex_shader_fn p_begin;
 static scene_fn p_end;
 static vertex2_fn p_vertex2f;
@@ -78,21 +118,43 @@ static pair_fn p_select_vertex_shader;
 static fixed_function_fn p_fixed_function;
 static copy_rects_fn p_copy_rects;
 static int g_host_ready;
+static void (*g_host_input_pump)(void);
+void noble_d3d8_set_host_input_pump(void (*pump)(void))
+{
+    g_host_input_pump = pump;
+}
 static __declspec(thread) int g_guest_only;
+static uint32_t cap_stream_ptr, cap_stream_stride;
+static void capture_indexed_vdata(uint32_t idx_ptr, uint32_t count)
+{
+    uint32_t i, max_index = 0, bytes;
+    if (!cap_stream_ptr || !cap_stream_stride)
+        return;
+    for (i = 0; i < count; i++) {
+        uint16_t v = MEM16(idx_ptr + i * 2u);
+        if (v > max_index) max_index = v;
+    }
+    bytes = (max_index + 1u) * cap_stream_stride;
+    recomp_rcap_snapshot("indexed_vdata", cap_stream_ptr, bytes, 0, 0, 0);
+}
 static int hle_trace_enabled(void)
 {
     static int enabled=-1;
     if(enabled<0) enabled=getenv("RECOMP_D3D8GL_TRACE")!=NULL;
     return enabled;
 }
-static double g_hle_cost[10];
+static double g_hle_cost[20];
+static unsigned g_hle_draw_up_calls, g_hle_draw_indexed_up_calls;
+static unsigned g_hle_draw_calls, g_hle_draw_indexed_calls, g_hle_clear_calls;
+static unsigned g_hle_create_shader_calls, g_hle_pixel_shader_calls;
+static double g_hle_gpu_ms;
 static double hle_time(void)
 {
     static int enabled=-1;
     static LARGE_INTEGER frequency;
     LARGE_INTEGER now;
     if(enabled<0) {
-        enabled=getenv("RECOMP_GPU_STATS")!=NULL;
+        enabled=getenv("RECOMP_HLE_STATS")!=NULL;
         QueryPerformanceFrequency(&frequency);
     }
     if(!enabled) return 0;
@@ -108,6 +170,14 @@ extern void xbox_FramebufferWindowPresent(uint32_t, uint32_t);
 extern void xbox_FramebufferWindowSetAA(uint32_t);
 extern void xbox_FramebufferWindowStart(void);
 
+static int gpu_query_enabled(void)
+{
+    static int enabled = -1;
+    if (enabled < 0)
+        enabled = getenv("RECOMP_GPU_QUERY") != NULL;
+    return enabled;
+}
+
 static int load_dll(void)
 {
     if (g_attempted)
@@ -120,6 +190,12 @@ static int load_dll(void)
         fprintf(stderr, "[D3D8HLE] cannot load d3d8gl.dll (error %lu)\n",
                 (unsigned long)GetLastError());
         return 0;
+    }
+    {
+        typedef void (*set_pump_fn)(void (*)(void));
+        set_pump_fn set_pump = (set_pump_fn)GetProcAddress(
+            g_module, "noble_d3d8_set_input_pump");
+        if (set_pump) set_pump(g_host_input_pump);
     }
 #define LOAD(name, type) \
     do { p_##name = (type)GetProcAddress(g_module, "noble_d3d8_" #name); \
@@ -149,6 +225,19 @@ static int load_dll(void)
     LOAD(draw_up, draw_up_fn);
     LOAD(draw_indexed_up, draw_indexed_up_fn);
     LOAD(readback, readback_fn);
+    LOAD(readback_swap, readback_fn);
+    LOAD(gpu_frame_begin, gpu_begin_fn);
+    LOAD(gpu_frame_end, gpu_end_fn);
+    LOAD(shader_stats, shader_stats_fn);
+    LOAD(gpu_frame_poll, gpu_poll_fn);
+    p_texture_bytes = (texture_bytes_fn)GetProcAddress(g_module,
+                                                       "noble_d3d8_texture_bytes");
+    p_texture_manifest = (texture_manifest_fn)GetProcAddress(g_module,
+                                                              "noble_d3d8_texture_manifest");
+    LOAD(texture_stats, texture_stats_fn);
+    LOAD(texture_frame, texture_frame_fn);
+    LOAD(upload_stats, upload_stats_fn);
+    LOAD(readback_stats, readback_stats_fn);
     LOAD(begin, vertex_shader_fn);
     LOAD(end, scene_fn);
     LOAD(vertex2f, vertex2_fn);
@@ -193,6 +282,53 @@ int noble_d3d8_init(void)
 static uint32_t arg(unsigned index)
 {
     return MEM32(g_esp + 4 + index * 4);
+}
+
+static void wide_probe_draw(uint32_t va, uint32_t device)
+{
+    static int initialized, enabled;
+    static unsigned frames[8], count;
+    unsigned i, flip;
+    if (!initialized) {
+        const char *p = getenv("RECOMP_WIDE_GUEST_TRACE");
+        initialized = 1;
+        while (p && *p && count < 8) {
+            char *end;
+            unsigned long frame = strtoul(p, &end, 10);
+            if (end == p) break;
+            frames[count++] = (unsigned)frame;
+            if (*end != ',') break;
+            p = end + 1;
+        }
+        enabled = count != 0;
+    }
+    if (!enabled) return;
+    flip = xbox_FramebufferFlipCount();
+    for (i = 0; i < count; i++) {
+        if (flip + 1 >= frames[i] && flip <= frames[i] + 1) {
+            uint32_t depth = MEM32(0x00A4E2D8u);
+            uint32_t state = depth < 64 ? MEM32(0x00A4E2DCu + depth * 4) : 0xffffffffu;
+            uint32_t fp = g_ebp, parent = 0, grandparent = 0;
+            if (fp >= 0x10000u && fp < 0x03fffff8u) {
+                uint32_t previous = MEM32(fp);
+                parent = MEM32(fp + 4);
+                if (previous >= 0x10000u && previous < 0x03fffff8u && previous > fp)
+                    grandparent = MEM32(previous + 4);
+            }
+            fprintf(stderr, "[WIDE-GUEST] flip=%u entry=%08X caller=%08X shader=%08X depth=%u state=%u parent=%08X grandparent=%08X\n",
+                    flip, va, MEM32(g_esp), MEM32(device + 0x798), depth, state, parent, grandparent);
+            {
+                uint32_t stack[32];
+                int j, n = recomp_guest_profile_stack(stack, 32);
+                if (n) {
+                    fprintf(stderr, "[WIDE-STACK] flip=%u caller=%08X", flip, MEM32(g_esp));
+                    for (j = 0; j < n; ++j) fprintf(stderr, " %08X", stack[j]);
+                    fputc('\n', stderr);
+                }
+            }
+            break;
+        }
+    }
 }
 
 /* Keep guest shader handles separate from the host's private objects. */
@@ -254,6 +390,9 @@ int noble_d3d8_guest_call(uint32_t va, uint32_t cleanup)
     static int enabled = -1;
     uint32_t device;
     double submit_start;
+    /* Swap entry is guest/main-thread owned on both renderer paths. The GPU
+     * consumer's pacing callback is deliberately not used for SDL events. */
+    if (va == 0x003B6520u && g_host_input_pump) g_host_input_pump();
     if (enabled < 0) {
         const char *value=getenv("RECOMP_D3D8GL");
         enabled=value && *value && strcmp(value,"0");
@@ -282,11 +421,15 @@ int noble_d3d8_guest_call(uint32_t va, uint32_t cleanup)
      * guest shadow. Embedded constants are synchronized at shader loading. */
     if (va==0x003BA740u || va==0x003BA8B0u || va==0x003BA9F0u || va==0x003BAD40u) {
         double prepare_start=hle_time();
+        wide_probe_draw(va, device);
+        recomp_timeline_event("prepare_begin", "pixel_shader", 0, 0);
+        recomp_rcap_state("prepare", 0, 0, 0);
         if(!prepare_pixel_shader(device)) {
             fprintf(stderr,"[D3D8HLE] unsupported fixed-function state; stopping instead of discarding a draw\n");
             ExitProcess(1);
         }
         g_hle_cost[3]+=hle_time()-prepare_start;
+        recomp_timeline_event("prepare_end", "pixel_shader", 0, 0);
         p_viewport(device+0xEE0); /* Recompute the reserved viewport constants. */
         if (hle_trace_enabled()) {
             static unsigned draws;
@@ -317,8 +460,19 @@ int noble_d3d8_guest_call(uint32_t va, uint32_t cleanup)
     switch (va) {
     case 0x003B6520u: { /* Swap(flags), NOT SetRenderTarget. */
         static unsigned trace_swaps;
+        recomp_timeline_swap_begin();
         uint32_t surface=MEM32(device+0x1A04);
-        int readback=p_readback(surface);
+        recomp_timeline_event("gpu_end_begin", "query", 0, 0);
+        if (gpu_query_enabled()) {
+            p_gpu_frame_end();
+            recomp_timeline_event("gpu_poll_begin", "query", 0, 0);
+            { unsigned long gf=0; double gms=0.0; if (p_gpu_frame_poll(&gf,&gms)) { static int gpu_log=-1; if(gpu_log<0) gpu_log=getenv("RECOMP_GPU_FRAME_LOG")!=NULL; g_hle_gpu_ms += gms; recomp_timeline_event("gpu_complete", "query", (double)gf, gms); if(gpu_log) fprintf(stderr,"[GPU-FRAME] frame=%lu ms=%.3f region=draws\n",gf,gms); } }
+            recomp_timeline_event("gpu_poll_end", "query", 0, 0);
+        }
+        recomp_timeline_event("readback_begin", "swap", 0, 0);
+        recomp_rcap_sync("readback");
+        int readback=p_readback_swap(surface);
+        recomp_timeline_event("readback_end", "swap", 0, 0);
         g_hle_cost[0]+=hle_time()-submit_start;
         if (trace_swaps++<3)
             fprintf(stderr,"[D3D8HLE] swap surface=%08X data=%08X format=%08X size=%08X readback=%d\n",
@@ -333,51 +487,106 @@ int noble_d3d8_guest_call(uint32_t va, uint32_t cleanup)
                 if (data<0x04000000) data|=0x80000000;
                 xbox_FramebufferWindowSet(data,pitch);
                 xbox_FramebufferWindowSetAA(1);
+                recomp_timeline_event("framebuffer_present_begin", "swap", 0, 0);
                 xbox_FramebufferWindowPresent(data,pitch);
+                recomp_timeline_event("framebuffer_present_end", "swap", 0, 0);
             }
         }
         {
             static unsigned measured_frames;
             double present_start=hle_time();
             unsigned i;
+            recomp_timeline_event("present_begin", "swap", 0, 0);
+            recomp_rcap_sync("present");
             p_present();
+            recomp_timeline_event("present_end", "swap", 0, 0);
+            if (gpu_query_enabled()) p_gpu_frame_begin();
+            recomp_timeline_event("gpu_begin", "query", 0, 0);
             g_hle_cost[1]+=hle_time()-present_start;
             if(++measured_frames==120 && present_start) {
-                fprintf(stderr,"[HLE-PERF] readback=%.2f present=%.2f submit=%.2f prepare=%.2f copy=%.2f set=%.2f stream=%.2f texture=%.2f palette=%.2f ms/frame\n",
+                unsigned long shader_compiles=0, shader_queries=0, shader_misses=0;
+                unsigned long long up_uploads=0, up_bytes=0, up_calls=0, rb_frames=0;
+                double up_ms=0.0, rb_map=0.0, rb_copy=0.0, rb_enq=0.0;
+                p_shader_stats(&shader_compiles,&shader_queries,&shader_misses);
+                p_upload_stats(&up_uploads,&up_bytes,&up_calls,&up_ms);
+                p_readback_stats(&rb_frames,&rb_map,&rb_copy,&rb_enq);
+                {
+                    static unsigned long long prev[15];
+                    static unsigned long prev_frame;
+                    unsigned long long cur[15];
+                    unsigned long frame = p_texture_frame();
+                    unsigned j;
+                    p_texture_stats(&cur[0],&cur[1],&cur[2],&cur[3],&cur[4],&cur[5],&cur[6],
+                                    &cur[7],&cur[8],&cur[9],&cur[10],&cur[11],&cur[12],&cur[13],&cur[14]);
+                    if (!prev_frame) prev_frame = frame;
+                    if (frame - prev_frame >= 120) {
+                        fprintf(stderr,"[TEX-PERF] frames=%lu-%lu lookups=%llu hits=%llu misses=%llu content_checks=%llu content_bytes=%llu changes=%llu uploads=%llu pal_lookups=%llu pal_select=%llu pal_select_changes=%llu pal_hashes=%llu pal_bytes=%llu pal_content_changes=%llu variant_mismatch=%llu invalidation=%llu per_frame_lookups=%.1f\n",
+                            prev_frame, frame,
+                            cur[0]-prev[0],cur[1]-prev[1],cur[2]-prev[2],cur[3]-prev[3],cur[4]-prev[4],cur[5]-prev[5],cur[6]-prev[6],
+                            cur[7]-prev[7],cur[8]-prev[8],cur[9]-prev[9],cur[10]-prev[10],cur[11]-prev[11],cur[12]-prev[12],cur[13]-prev[13],cur[14]-prev[14],
+                            (double)(cur[0]-prev[0]) / (double)(frame - prev_frame ? frame - prev_frame : 1));
+                        for (j=0;j<15;j++) prev[j]=cur[j];
+                        prev_frame=frame;
+                    }
+                }
+                fprintf(stderr,"[HLE-PERF] readback=%.2f present=%.2f submit=%.2f prepare=%.2f copy=%.2f set=%.2f stream=%.2f texture=%.2f palette=%.2f end=%.2f begin=%.2f draw_up=%.2f idx_up=%.2f draw=%.2f idx=%.2f clear=%.2f vsh=%.2f psh=%.2f gpu=%.2f ms/frame draws=%u/%u/%u/%u/%u vsh=%u psh=%u shader_compiles=%lu psh_cache=%lu/%lu up_kib=%.2f up_calls=%.1f rb_map=%.3f rb_copy=%.3f rb_enq=%.3f\n",
                     g_hle_cost[0]/120,g_hle_cost[1]/120,g_hle_cost[2]/120,g_hle_cost[3]/120,g_hle_cost[4]/120,
-                    g_hle_cost[5]/120,g_hle_cost[9]/120,g_hle_cost[7]/120,g_hle_cost[8]/120);
-                for(i=0;i<10;i++) g_hle_cost[i]=0;
+                    g_hle_cost[5]/120,g_hle_cost[9]/120,g_hle_cost[7]/120,g_hle_cost[8]/120,
+                    g_hle_cost[10]/120,g_hle_cost[11]/120,g_hle_cost[12]/120,g_hle_cost[13]/120,
+                    g_hle_cost[14]/120,g_hle_cost[15]/120,g_hle_cost[16]/120,g_hle_cost[18]/120,g_hle_cost[19]/120,
+                    g_hle_gpu_ms/120,
+                    g_hle_draw_up_calls,g_hle_draw_indexed_up_calls,g_hle_draw_calls,g_hle_draw_indexed_calls,g_hle_clear_calls,
+                    g_hle_create_shader_calls,g_hle_pixel_shader_calls,
+                    shader_compiles,shader_queries,shader_misses,
+                    (double)up_bytes/(1024.0*120.0),(double)up_calls/120.0,
+                    rb_frames ? rb_map/rb_frames : 0.0,
+                    rb_frames ? rb_copy/rb_frames : 0.0,
+                    rb_frames ? rb_enq/rb_frames : 0.0);
+                for(i=0;i<20;i++) g_hle_cost[i]=0;
+                g_hle_draw_up_calls=g_hle_draw_indexed_up_calls=0;
+                g_hle_draw_calls=g_hle_draw_indexed_calls=g_hle_clear_calls=0;
+                g_hle_create_shader_calls=g_hle_pixel_shader_calls=0;
+                g_hle_gpu_ms=0;
                 measured_frames=0;
             }
         }
+        recomp_rcap_state("swap", surface, 0, 0);
+        recomp_timeline_swap_end();
         return 0; /* Guest buffer rotation, counter and pacing run once. */
     }
-    case 0x003B6FB0u: p_render_target(arg(0),arg(1)); return 0;
+    case 0x003B6FB0u: p_render_target(arg(0),arg(1)); recomp_rcap_state("render_target", arg(0), arg(1), 0); return 0;
     case 0x003B7280u: {
         static unsigned copies;
+        recomp_timeline_event("copy_begin", "copy_rects", 0, 0);
+        recomp_rcap_state("copy", arg(0), arg(2), arg(3));
         int copied=p_copy_rects(arg(0),arg(1),arg(2),arg(3),arg(4));
+        recomp_timeline_event("copy_end", "copy_rects", 0, 0);
         g_hle_cost[4]+=hle_time()-submit_start;
         if(copies++<3) fprintf(stderr,"[D3D8HLE] copy src=%08X dst=%08X count=%u gpu=%d\n",
             MEM32(arg(0)+4),MEM32(arg(3)+4),arg(2),copied);
         if(!copied) return 0;
         break;
     }
-    case 0x003B75F0u: { double t=hle_time(); p_viewport(arg(0)); g_hle_cost[5]+=hle_time()-t; return 0; }
-    case 0x003B6B80u: { double t=hle_time(); p_transform(arg(0),arg(1)); g_hle_cost[6]+=hle_time()-t; return 0; }
-    case 0x003B7820u: { double t=hle_time(); p_texture(arg(0),arg(1)); g_hle_cost[7]+=hle_time()-t; return 0; }
-    case 0x003B79D0u: { double t=hle_time(); p_palette(arg(0),arg(1)); g_hle_cost[8]+=hle_time()-t; return 0; }
-    case 0x003B8A50u: { double t=hle_time(); p_stream(arg(0),arg(1),arg(2)); g_hle_cost[9]+=hle_time()-t; return 0; }
-    case 0x003B7A60u: { double t=hle_time(); p_indices(arg(0),arg(1)); g_hle_cost[5]+=hle_time()-t; return 0; }
+    case 0x003B75F0u: { double t=hle_time(); recomp_timeline_event("state_begin", "viewport", arg(0), 0); recomp_rcap_state("viewport", arg(0), 0, 0); p_viewport(arg(0)); recomp_timeline_event("state_end", "viewport", 0, 0); g_hle_cost[5]+=hle_time()-t; return 0; }
+    case 0x003B6B80u: { double t=hle_time(); recomp_timeline_event("state_begin", "transform", arg(0), 0); p_transform(arg(0),arg(1)); recomp_timeline_event("state_end", "transform", 0, 0); g_hle_cost[6]+=hle_time()-t; return 0; }
+    case 0x003B7820u: { double t=hle_time(); recomp_timeline_event("state_begin", "texture", arg(0), arg(1)); { uint32_t _manifest[19]; int _valid = 0; int _ok = 0; unsigned long long _pre[15] = {0}, _post[15] = {0}; unsigned long long _pu0 = 0, _pu1 = 0, _pu2 = 0; double _pd = 0.0; int _capture = recomp_rcap_active(); recomp_rcap_texture_bind(arg(0), arg(1)); if (_capture) { recomp_rcap_texture_frame(p_texture_frame()); p_texture_stats(&_pre[0],&_pre[1],&_pre[2],&_pre[3],&_pre[4],&_pre[5],&_pre[6],&_pre[7],&_pre[8],&_pre[9],&_pre[10],&_pre[11],&_pre[12],&_pre[13],&_pre[14]); p_upload_stats(&_pu0,&_pu1,&_pu2,&_pd); } if (p_texture_manifest && arg(1)) { memset(_manifest, 0, sizeof(_manifest)); _valid = p_texture_manifest((const uint32_t *)XBOX_PTR(arg(1)), _manifest); _ok = _manifest[16] != 0; } if (_ok) { recomp_rcap_manifest("texture", arg(1), _manifest[16], (uint32_t)_valid, _manifest, 19); if (_valid) recomp_rcap_snapshot("texture_header", arg(1), 64, arg(0), arg(1), 0); } else recomp_rcap_unsupported("texture_manifest"); p_texture(arg(0),arg(1)); if (_capture) { p_texture_stats(&_post[0],&_post[1],&_post[2],&_post[3],&_post[4],&_post[5],&_post[6],&_post[7],&_post[8],&_post[9],&_post[10],&_post[11],&_post[12],&_post[13],&_post[14]); { unsigned long long _pu3 = 0, _pu4 = 0, _pu5 = 0; double _pd2 = 0.0; p_upload_stats(&_pu3,&_pu4,&_pu5,&_pd2); recomp_rcap_renderer_bytes(_post[4] - _pre[4], _pu4 - _pu1); } } recomp_timeline_event("state_end", "texture", 0, 0); g_hle_cost[7]+=hle_time()-t; return 0; } }
+    case 0x003B79D0u: { double t=hle_time(); recomp_timeline_event("state_begin", "palette", arg(0), arg(1)); if (arg(1)) { uint32_t _pdata = MEM32(arg(1) + 4); if (_pdata < 0x04000000u) _pdata |= 0x80000000u; recomp_rcap_snapshot("palette_header", arg(1), 64, arg(0), arg(1), 0); recomp_rcap_snapshot("palette_data", _pdata, 1024, arg(0), arg(1), 0); } p_palette(arg(0),arg(1)); recomp_timeline_event("state_end", "palette", 0, 0); g_hle_cost[8]+=hle_time()-t; return 0; }
+    case 0x003B8A50u: { double t=hle_time(); recomp_timeline_event("state_begin", "stream", arg(0), arg(1)); recomp_rcap_state("stream", arg(0), arg(1), arg(2)); cap_stream_ptr = arg(1); cap_stream_stride = arg(2); p_stream(arg(0),arg(1),arg(2)); recomp_timeline_event("state_end", "stream", 0, 0); g_hle_cost[9]+=hle_time()-t; return 0; }
+    case 0x003B7A60u: { double t=hle_time(); recomp_timeline_event("state_begin", "indices", arg(0), arg(1)); recomp_rcap_state("indices", arg(0), arg(1), 0); p_indices(arg(0),arg(1)); recomp_timeline_event("state_end", "indices", 0, 0); g_hle_cost[5]+=hle_time()-t; return 0; }
     case 0x003B8820u:
+        recomp_rcap_snapshot("vconst", g_edx, 16, (uint32_t)g_ecx - 96u, 1, 0);
         p_vertex_constants((int)g_ecx-96,g_edx,1); return 0;
     case 0x003B8880u:
+        recomp_rcap_snapshot("vconst", g_edx, 64, (uint32_t)g_ecx - 96u, 4, 0);
         p_vertex_constants((int)g_ecx-96,g_edx,4); return 0;
     case 0x003B8930u:
-        if (!(arg(0)&3)) p_vertex_constants((int)g_ecx-96,g_edx,arg(0)/4);
+        if (!(arg(0)&3)) { recomp_rcap_snapshot("vconst", g_edx, (arg(0)/4)*16u, (uint32_t)g_ecx - 96u, arg(0)/4, 0); p_vertex_constants((int)g_ecx-96,g_edx,arg(0)/4); }
         return 0;
     case 0x003B86E0u: {
         uint32_t declaration=arg(0),function=arg(1),out=arg(2),usage=arg(3);
+        double t=hle_time();
         uint32_t host=p_create_vertex_shader(declaration,function,usage);
+        g_hle_cost[18]+=hle_time()-t; g_hle_create_shader_calls++;
         g_guest_only=1;
         sub_003B86E0();
         g_guest_only=0;
@@ -387,16 +596,16 @@ int noble_d3d8_guest_call(uint32_t va, uint32_t cleanup)
         }
         return 1;
     }
-    case 0x003B8E30u: p_vertex_shader(host_shader(arg(0))); return 0;
+    case 0x003B8E30u: p_vertex_shader(host_shader(arg(0))); recomp_rcap_state("vsh_select", arg(0), 0, 0); return 0;
     case 0x003B8AE0u: p_load_vertex_shader(host_shader(arg(0)),arg(1)); return 0;
     case 0x003B8B40u: p_select_vertex_shader(host_shader(arg(0)),arg(1)); return 0;
-    case 0x003BAE20u: /* Guest shader object owns the definition at +8. */
-        p_pixel_shader(arg(0)?MEM32(arg(0)+8):0); return 0;
+    case 0x003BAE20u: { /* Guest shader object owns the definition at +8. */
+        double t=hle_time(); recomp_rcap_unsupported("pshader_content"); p_pixel_shader(arg(0)?MEM32(arg(0)+8):0); g_hle_cost[19]+=hle_time()-t; g_hle_pixel_shader_calls++; return 0; }
     case 0x003B66D0u: {
         uint32_t bits=arg(4);
         float z;
         memcpy(&z,&bits,sizeof z);
-        p_clear(arg(0),arg(1),arg(2),arg(3),z,arg(5));
+        { double t=hle_time(); recomp_timeline_event("draw_begin", "clear", arg(1), 0); recomp_rcap_state("clear", arg(0), arg(1), arg(5)); p_clear(arg(0),arg(1),arg(2),arg(3),z,arg(5)); recomp_timeline_event("draw_end", "clear", 0, 0); g_hle_cost[16]+=hle_time()-t; g_hle_clear_calls++; }
         break;
     }
     case 0x003BA740u:
@@ -405,7 +614,7 @@ int noble_d3d8_guest_call(uint32_t va, uint32_t cleanup)
                     arg(0),arg(1),arg(2),arg(3));
         if (hle_trace_enabled())
             fprintf(stderr,"[D3D8HLE] DRAW_UP host=%p before\n",(void*)p_draw_up);
-        p_draw_up(arg(0),arg(1),arg(2),arg(3));
+        { double t=hle_time(); recomp_timeline_event("draw_begin", "draw_up", arg(0), arg(1)); recomp_rcap_snapshot("draw_up_vdata", arg(2), arg(1) * (arg(3) ? arg(3) : 12u), arg(0), arg(1), arg(3)); p_draw_up(arg(0),arg(1),arg(2),arg(3)); recomp_timeline_event("draw_end", "draw_up", 0, 0); g_hle_cost[12]+=hle_time()-t; g_hle_draw_up_calls++; }
         if (hle_trace_enabled())
             fprintf(stderr,"[D3D8HLE] DRAW_UP after\n");
         break;
@@ -413,16 +622,16 @@ int noble_d3d8_guest_call(uint32_t va, uint32_t cleanup)
         if (hle_trace_enabled())
             fprintf(stderr,"[D3D8HLE] DRAW_IDX_UP prim=%u count=%u idx=%08X data=%08X stride=%u\n",
                     arg(0),arg(1),arg(2),arg(3),arg(4));
-        p_draw_indexed_up(arg(0),arg(1),arg(2),arg(3),arg(4));
+        { double t=hle_time(); recomp_timeline_event("draw_begin", "draw_idx_up", arg(0), arg(1)); recomp_rcap_snapshot("draw_idx_up_idx", arg(2), arg(1) * 2u, arg(0), arg(1), 0); capture_indexed_vdata(arg(2), arg(1)); recomp_rcap_snapshot("draw_idx_up_vdata", arg(3), arg(1) * (arg(4) ? arg(4) : 12u), arg(0), arg(1), arg(4)); p_draw_indexed_up(arg(0),arg(1),arg(2),arg(3),arg(4)); recomp_timeline_event("draw_end", "draw_idx_up", 0, 0); g_hle_cost[13]+=hle_time()-t; g_hle_draw_indexed_up_calls++; }
         break;
     case 0x003BA9F0u:
         if (hle_trace_enabled())
             fprintf(stderr,"[D3D8HLE] DRAW_IDX prim=%u count=%u idx=%08X\n",
                     arg(0),arg(1),arg(2));
-        p_draw_indexed(arg(0),arg(1),arg(2));
+        { double t=hle_time(); recomp_timeline_event("draw_begin", "draw_idx", arg(0), arg(1)); recomp_rcap_snapshot("draw_idx_idx", arg(2), arg(1) * 2u, arg(0), arg(1), 0); p_draw_indexed(arg(0),arg(1),arg(2)); recomp_timeline_event("draw_end", "draw_idx", 0, 0); g_hle_cost[15]+=hle_time()-t; g_hle_draw_indexed_calls++; }
         break;
-    case 0x003BAD40u: p_begin(arg(0)); return 0; /* Guest Begin/End maintain device flags. */
-    case 0x003BAD80u: p_end(); return 0;
+    case 0x003BAD40u: { double t=hle_time(); p_begin(arg(0)); g_hle_cost[11]+=hle_time()-t; return 0; } /* Guest Begin/End maintain device flags. */
+    case 0x003BAD80u: { double t=hle_time(); p_end(); g_hle_cost[10]+=hle_time()-t; return 0; }
     case 0x003BAC50u: p_vertex2f(arg(0),arg(1),arg(2)); break;
     case 0x003BAC90u: p_vertex4f(arg(0),arg(1),arg(2),arg(3),arg(4)); break;
     case 0x003BACF0u: p_vertex_color(arg(0),arg(1)); break;

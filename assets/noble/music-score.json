@@ -1,0 +1,409 @@
+{
+  "title": "The Quiet Orrery",
+  "version": 1,
+  "duration_seconds": 32,
+  "sample_rate": 44100,
+  "tempo_bpm": 60,
+  "meter": "4/4",
+  "tonal_center": "D minor; suspended and extended harmonies",
+  "peak_amplitude": 0.2,
+  "provenance": {
+    "origin": "Original composition and mathematical synthesis created for Noble Archimedes.",
+    "sources": "No external audio, melodies, samples, soundfonts, or game assets.",
+    "reproduction": "python tools/branding/generate_music.py",
+    "license": "See project LICENSE for original project materials."
+  },
+  "synthesis": {
+    "organ": "Sine partials 1, 2, 3; slow sine-squared attack and release.",
+    "celesta": "Exponentially decaying sine partials 1, 2, 4; soft attack and release.",
+    "space": "Three circular stereo delay taps; tails wrap into the next repetition.",
+    "loop": "Each voice envelope reaches zero at both ends; note tails and echoes wrap modulo 32 seconds.",
+    "normalization": "Fixed whole-loop peak at 20% full scale, approximately -14 dBFS peak."
+  },
+  "events": [
+    {
+      "start": 0.0,
+      "duration": 6.2,
+      "midi": 38,
+      "instrument": "organ",
+      "gain": 0.4,
+      "pan": -0.25
+    },
+    {
+      "start": 0.0,
+      "duration": 6.2,
+      "midi": 53,
+      "instrument": "organ",
+      "gain": 0.28,
+      "pan": -0.65
+    },
+    {
+      "start": 0.0,
+      "duration": 6.2,
+      "midi": 57,
+      "instrument": "organ",
+      "gain": 0.28,
+      "pan": 0.6
+    },
+    {
+      "start": 0.0,
+      "duration": 6.2,
+      "midi": 64,
+      "instrument": "organ",
+      "gain": 0.28,
+      "pan": 0.15
+    },
+    {
+      "start": 4.0,
+      "duration": 6.2,
+      "midi": 34,
+      "instrument": "organ",
+      "gain": 0.4,
+      "pan": -0.25
+    },
+    {
+      "start": 4.0,
+      "duration": 6.2,
+      "midi": 53,
+      "instrument": "organ",
+      "gain": 0.28,
+      "pan": -0.65
+    },
+    {
+      "start": 4.0,
+      "duration": 6.2,
+      "midi": 57,
+      "instrument": "organ",
+      "gain": 0.28,
+      "pan": 0.6
+    },
+    {
+      "start": 4.0,
+      "duration": 6.2,
+      "midi": 62,
+      "instrument": "organ",
+      "gain": 0.28,
+      "pan": 0.15
+    },
+    {
+      "start": 8.0,
+      "duration": 6.2,
+      "midi": 43,
+      "instrument": "organ",
+      "gain": 0.4,
+      "pan": -0.25
+    },
+    {
+      "start": 8.0,
+      "duration": 6.2,
+      "midi": 53,
+      "instrument": "organ",
+      "gain": 0.28,
+      "pan": -0.65
+    },
+    {
+      "start": 8.0,
+      "duration": 6.2,
+      "midi": 58,
+      "instrument": "organ",
+      "gain": 0.28,
+      "pan": 0.6
+    },
+    {
+      "start": 8.0,
+      "duration": 6.2,
+      "midi": 65,
+      "instrument": "organ",
+      "gain": 0.28,
+      "pan": 0.15
+    },
+    {
+      "start": 12.0,
+      "duration": 6.2,
+      "midi": 45,
+      "instrument": "organ",
+      "gain": 0.4,
+      "pan": -0.25
+    },
+    {
+      "start": 12.0,
+      "duration": 6.2,
+      "midi": 52,
+      "instrument": "organ",
+      "gain": 0.28,
+      "pan": -0.65
+    },
+    {
+      "start": 12.0,
+      "duration": 6.2,
+      "midi": 59,
+      "instrument": "organ",
+      "gain": 0.28,
+      "pan": 0.6
+    },
+    {
+      "start": 12.0,
+      "duration": 6.2,
+      "midi": 64,
+      "instrument": "organ",
+      "gain": 0.28,
+      "pan": 0.15
+    },
+    {
+      "start": 16.0,
+      "duration": 6.2,
+      "midi": 38,
+      "instrument": "organ",
+      "gain": 0.4,
+      "pan": -0.25
+    },
+    {
+      "start": 16.0,
+      "duration": 6.2,
+      "midi": 53,
+      "instrument": "organ",
+      "gain": 0.28,
+      "pan": -0.65
+    },
+    {
+      "start": 16.0,
+      "duration": 6.2,
+      "midi": 57,
+      "instrument": "organ",
+      "gain": 0.28,
+      "pan": 0.6
+    },
+    {
+      "start": 16.0,
+      "duration": 6.2,
+      "midi": 62,
+      "instrument": "organ",
+      "gain": 0.28,
+      "pan": 0.15
+    },
+    {
+      "start": 20.0,
+      "duration": 6.2,
+      "midi": 41,
+      "instrument": "organ",
+      "gain": 0.4,
+      "pan": -0.25
+    },
+    {
+      "start": 20.0,
+      "duration": 6.2,
+      "midi": 52,
+      "instrument": "organ",
+      "gain": 0.28,
+      "pan": -0.65
+    },
+    {
+      "start": 20.0,
+      "duration": 6.2,
+      "midi": 57,
+      "instrument": "organ",
+      "gain": 0.28,
+      "pan": 0.6
+    },
+    {
+      "start": 20.0,
+      "duration": 6.2,
+      "midi": 64,
+      "instrument": "organ",
+      "gain": 0.28,
+      "pan": 0.15
+    },
+    {
+      "start": 24.0,
+      "duration": 6.2,
+      "midi": 40,
+      "instrument": "organ",
+      "gain": 0.4,
+      "pan": -0.25
+    },
+    {
+      "start": 24.0,
+      "duration": 6.2,
+      "midi": 55,
+      "instrument": "organ",
+      "gain": 0.28,
+      "pan": -0.65
+    },
+    {
+      "start": 24.0,
+      "duration": 6.2,
+      "midi": 58,
+      "instrument": "organ",
+      "gain": 0.28,
+      "pan": 0.6
+    },
+    {
+      "start": 24.0,
+      "duration": 6.2,
+      "midi": 62,
+      "instrument": "organ",
+      "gain": 0.28,
+      "pan": 0.15
+    },
+    {
+      "start": 28.0,
+      "duration": 6.2,
+      "midi": 45,
+      "instrument": "organ",
+      "gain": 0.4,
+      "pan": -0.25
+    },
+    {
+      "start": 28.0,
+      "duration": 6.2,
+      "midi": 52,
+      "instrument": "organ",
+      "gain": 0.28,
+      "pan": -0.65
+    },
+    {
+      "start": 28.0,
+      "duration": 6.2,
+      "midi": 58,
+      "instrument": "organ",
+      "gain": 0.28,
+      "pan": 0.6
+    },
+    {
+      "start": 28.0,
+      "duration": 6.2,
+      "midi": 64,
+      "instrument": "organ",
+      "gain": 0.28,
+      "pan": 0.15
+    },
+    {
+      "start": 1.0,
+      "duration": 3.6,
+      "midi": 74,
+      "instrument": "celesta",
+      "gain": 0.25,
+      "pan": -0.35
+    },
+    {
+      "start": 3.0,
+      "duration": 3.6,
+      "midi": 69,
+      "instrument": "celesta",
+      "gain": 0.25,
+      "pan": 0.4
+    },
+    {
+      "start": 5.5,
+      "duration": 3.6,
+      "midi": 77,
+      "instrument": "celesta",
+      "gain": 0.25,
+      "pan": -0.35
+    },
+    {
+      "start": 7.0,
+      "duration": 3.6,
+      "midi": 76,
+      "instrument": "celesta",
+      "gain": 0.25,
+      "pan": 0.4
+    },
+    {
+      "start": 9.0,
+      "duration": 3.6,
+      "midi": 74,
+      "instrument": "celesta",
+      "gain": 0.25,
+      "pan": -0.35
+    },
+    {
+      "start": 11.5,
+      "duration": 3.6,
+      "midi": 70,
+      "instrument": "celesta",
+      "gain": 0.25,
+      "pan": 0.4
+    },
+    {
+      "start": 13.0,
+      "duration": 3.6,
+      "midi": 71,
+      "instrument": "celesta",
+      "gain": 0.25,
+      "pan": -0.35
+    },
+    {
+      "start": 15.0,
+      "duration": 3.6,
+      "midi": 76,
+      "instrument": "celesta",
+      "gain": 0.25,
+      "pan": 0.4
+    },
+    {
+      "start": 17.0,
+      "duration": 3.6,
+      "midi": 77,
+      "instrument": "celesta",
+      "gain": 0.25,
+      "pan": -0.35
+    },
+    {
+      "start": 19.5,
+      "duration": 3.6,
+      "midi": 81,
+      "instrument": "celesta",
+      "gain": 0.25,
+      "pan": 0.4
+    },
+    {
+      "start": 21.0,
+      "duration": 3.6,
+      "midi": 76,
+      "instrument": "celesta",
+      "gain": 0.25,
+      "pan": -0.35
+    },
+    {
+      "start": 23.0,
+      "duration": 3.6,
+      "midi": 72,
+      "instrument": "celesta",
+      "gain": 0.25,
+      "pan": 0.4
+    },
+    {
+      "start": 25.5,
+      "duration": 3.6,
+      "midi": 74,
+      "instrument": "celesta",
+      "gain": 0.25,
+      "pan": -0.35
+    },
+    {
+      "start": 27.0,
+      "duration": 3.6,
+      "midi": 70,
+      "instrument": "celesta",
+      "gain": 0.25,
+      "pan": 0.4
+    },
+    {
+      "start": 29.0,
+      "duration": 3.6,
+      "midi": 76,
+      "instrument": "celesta",
+      "gain": 0.25,
+      "pan": -0.35
+    },
+    {
+      "start": 31.0,
+      "duration": 3.6,
+      "midi": 73,
+      "instrument": "celesta",
+      "gain": 0.25,
+      "pan": 0.4
+    }
+  ]
+}

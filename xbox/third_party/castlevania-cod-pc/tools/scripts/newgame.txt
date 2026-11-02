@@ -1,0 +1,32 @@
+# New Game from a fresh boot: name "AAA", create a save, skip the opening movies, then walk and fight.
+# <ms from first pad read>:<buttons>[:<hold ms>]
+# title: New Game
+12000:a
+# name entry: three letters, Start jumps to Accept, A opens "Is this correct?"
+15000:a
+15600:a
+16200:a
+17000:start
+18000:a
+# "Is this correct?" Yes
+20000:a
+# "Create new save data?" defaults to No
+24000:left
+25000:a
+# save messages
+29000:a
+32000:a
+35000:a
+# opening movies (st00_00, st01_00)
+47500:start
+52000:start
+# gameplay from about 58 s: walk forward, attack, jump, walk sideways
+62000:lsu:2500
+65000:x
+65600:x
+66200:x
+68000:a
+70000:lsl:2000
+72500:lsr:2000
+75000:x
+75600:x

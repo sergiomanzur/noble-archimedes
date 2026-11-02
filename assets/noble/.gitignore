@@ -1,0 +1,5 @@
+# Only these original, project-authored/generated assets override global media ignores.
+!launcher-background.png
+!noble-icon.png
+!noble-archimedes.ico
+!launcher-theme.wav

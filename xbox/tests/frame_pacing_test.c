@@ -16,6 +16,15 @@ void nv2a_pb_perf_report(void) {}
 uint32_t xbox_GuestTickCount(void) { return 0; }
 uint32_t xbox_VblankCount(void) { return 0; }
 uint32_t xbox_FramebufferFlipCount(void) { return 0; }
+void xbox_StallStatsGet(unsigned long long *calls, unsigned long long *requested,
+                        unsigned long long *actual, unsigned long long *dsp)
+{
+    if (calls) *calls = 0;
+    if (requested) *requested = 0;
+    if (actual) *actual = 0;
+    if (dsp) *dsp = 0;
+}
+void xbox_StallStatsReset(void) {}
 
 #define QueryPerformanceFrequency test_frequency
 #define QueryPerformanceCounter test_counter

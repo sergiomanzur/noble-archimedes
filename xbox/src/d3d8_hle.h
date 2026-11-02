@@ -11,4 +11,7 @@ int noble_d3d8_guest_call(uint32_t va, uint32_t cleanup);
 /* Load d3d8gl.dll and create its GL device.  Returns nonzero on success. */
 int noble_d3d8_init(void);
 
+/* Host-owned main-thread event pump, independent of renderer selection. */
+void noble_d3d8_set_host_input_pump(void (*pump)(void));
+
 #endif

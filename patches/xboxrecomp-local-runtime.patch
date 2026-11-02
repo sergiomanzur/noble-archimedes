@@ -1,0 +1,1131 @@
+diff --git a/src/input/xinput_device.c b/src/input/xinput_device.c
+index 5975014..3a9cece 100644
+--- a/src/input/xinput_device.c
++++ b/src/input/xinput_device.c
+@@ -16,6 +16,43 @@
+ #include <stdlib.h>
+ #include <string.h>
+ 
++static int provider_active(void);
++
++/* Tables are immutable and outlive in-flight readers (normally static const).
++ * Publish one pointer atomically so shutdown cannot tear callback fields. */
++#if defined(_WIN32)
++static const XBOX_INPUT_PROVIDER *volatile g_provider;
++void xbox_InputSetProvider(const XBOX_INPUT_PROVIDER *provider)
++{
++    if (provider && !provider_active()) provider = NULL;
++    InterlockedExchangePointer((PVOID volatile *)&g_provider, (PVOID)provider);
++}
++static const XBOX_INPUT_PROVIDER *input_provider(void)
++{
++    return (const XBOX_INPUT_PROVIDER *)InterlockedCompareExchangePointer(
++        (PVOID volatile *)&g_provider, NULL, NULL);
++}
++#else
++#include <stdatomic.h>
++static _Atomic(const XBOX_INPUT_PROVIDER *) g_provider;
++void xbox_InputSetProvider(const XBOX_INPUT_PROVIDER *provider)
++{
++    if (provider && !provider_active()) provider = NULL;
++    atomic_store_explicit(&g_provider, provider, memory_order_release);
++}
++static const XBOX_INPUT_PROVIDER *input_provider(void)
++{
++    return atomic_load_explicit(&g_provider, memory_order_acquire);
++}
++#endif
++static int provider_active(void)
++{
++    const char *script = getenv("RECOMP_PAD_SCRIPT");
++    const char *live = getenv("RECOMP_PAD_LIVE");
++    const char *modern = getenv("RECOMP_MODERN_INPUT");
++    return !(script && *script) && !(live && *live) &&
++           !(modern && !strcmp(modern, "0"));
++}
+ /* Merge the keyboard on top of a pad on port 0 rather than only standing in
+  * for a missing one.
+  *
+@@ -64,6 +101,8 @@ static DWORD g_last_packet[XBOX_MAX_CONTROLLERS] = { 0 };
+ 
+ void xbox_InputInit(void)
+ {
++    const XBOX_INPUT_PROVIDER *provider = input_provider();
++    if (provider && provider->read && provider->connected && provider->capabilities && provider->rumble) return;
+     for (DWORD i = 0; i < XBOX_MAX_CONTROLLERS; i++) {
+         XINPUT_STATE state;
+         DWORD result = XInputGetState(i, &state);
+@@ -73,6 +112,8 @@ void xbox_InputInit(void)
+ 
+ DWORD xbox_InputGetState(DWORD dwPort, XBOX_INPUT_STATE *pState)
+ {
++    const XBOX_INPUT_PROVIDER *provider = input_provider();
++    if (provider && provider->read) return provider->read(dwPort, pState);
+     XINPUT_STATE xi_state;
+     DWORD result;
+ 
+@@ -136,6 +177,8 @@ DWORD xbox_InputGetState(DWORD dwPort, XBOX_INPUT_STATE *pState)
+ 
+ DWORD xbox_InputSetState(DWORD dwPort, const XBOX_VIBRATION *pVibration)
+ {
++    const XBOX_INPUT_PROVIDER *provider = input_provider();
++    if (provider && provider->rumble) return provider->rumble(dwPort, pVibration);
+     XINPUT_VIBRATION xi_vib;
+ 
+     if (dwPort >= XBOX_MAX_CONTROLLERS || !pVibration)
+@@ -148,12 +191,16 @@ DWORD xbox_InputSetState(DWORD dwPort, const XBOX_VIBRATION *pVibration)
+ 
+ BOOL xbox_InputIsConnected(DWORD dwPort)
+ {
++    const XBOX_INPUT_PROVIDER *provider = input_provider();
++    if (provider && provider->connected) return provider->connected(dwPort);
+     if (dwPort >= XBOX_MAX_CONTROLLERS) return FALSE;
+     return g_controller_connected[dwPort];
+ }
+ 
+ DWORD xbox_InputGetCapabilities(DWORD dwPort, DWORD dwFlags, XBOX_INPUT_CAPABILITIES *pCaps)
+ {
++    const XBOX_INPUT_PROVIDER *provider = input_provider();
++    if (provider && provider->capabilities) return provider->capabilities(dwPort, dwFlags, pCaps);
+     XINPUT_CAPABILITIES xi_caps;
+     DWORD result;
+ 
+@@ -218,6 +265,8 @@ static void open_controllers(void)
+ 
+ void xbox_InputInit(void)
+ {
++    const XBOX_INPUT_PROVIDER *provider = input_provider();
++    if (provider && provider->read && provider->connected && provider->capabilities && provider->rumble) return;
+     /* Keep the default SIGINT/SIGTERM: SDL would turn them into an SDL_QUIT
+      * that nothing reads without a window, and Ctrl-C would stop working. */
+     SDL_SetHint(SDL_HINT_NO_SIGNAL_HANDLERS, "1");
+@@ -228,6 +277,8 @@ void xbox_InputInit(void)
+ 
+ DWORD xbox_InputGetState(DWORD dwPort, XBOX_INPUT_STATE *pState)
+ {
++    const XBOX_INPUT_PROVIDER *provider = input_provider();
++    if (provider && provider->read) return provider->read(dwPort, pState);
+     if (dwPort >= XBOX_MAX_CONTROLLERS || !pState)
+         return ERROR_DEVICE_NOT_CONNECTED;
+ 
+@@ -292,6 +343,8 @@ DWORD xbox_InputGetState(DWORD dwPort, XBOX_INPUT_STATE *pState)
+ 
+ DWORD xbox_InputSetState(DWORD dwPort, const XBOX_VIBRATION *pVibration)
+ {
++    const XBOX_INPUT_PROVIDER *provider = input_provider();
++    if (provider && provider->rumble) return provider->rumble(dwPort, pVibration);
+     if (dwPort >= XBOX_MAX_CONTROLLERS || !pVibration)
+         return ERROR_DEVICE_NOT_CONNECTED;
+ 
+@@ -307,12 +360,16 @@ DWORD xbox_InputSetState(DWORD dwPort, const XBOX_VIBRATION *pVibration)
+ 
+ BOOL xbox_InputIsConnected(DWORD dwPort)
+ {
++    const XBOX_INPUT_PROVIDER *provider = input_provider();
++    if (provider && provider->connected) return provider->connected(dwPort);
+     if (dwPort >= XBOX_MAX_CONTROLLERS) return FALSE;
+     return g_controller_connected[dwPort];
+ }
+ 
+ DWORD xbox_InputGetCapabilities(DWORD dwPort, DWORD dwFlags, XBOX_INPUT_CAPABILITIES *pCaps)
+ {
++    const XBOX_INPUT_PROVIDER *provider = input_provider();
++    if (provider && provider->capabilities) return provider->capabilities(dwPort, dwFlags, pCaps);
+     (void)dwFlags;
+     if (dwPort >= XBOX_MAX_CONTROLLERS || !pCaps)
+         return ERROR_DEVICE_NOT_CONNECTED;
+diff --git a/src/input/xinput_xbox.h b/src/input/xinput_xbox.h
+index 4779275..1d3e71f 100644
+--- a/src/input/xinput_xbox.h
++++ b/src/input/xinput_xbox.h
+@@ -87,6 +87,16 @@ typedef struct XBOX_INPUT_CAPABILITIES {
+  * Maps Xbox controller ports to XInput slots.
+  */
+ void xbox_InputInit(void);
++/* Optional host snapshots, atomically installed/removed. Tables are immutable
++ * and must outlive in-flight calls; static const tables are recommended.
++ * NULL callbacks individually retain the original backend. */
++typedef struct XBOX_INPUT_PROVIDER {
++    DWORD (*read)(DWORD port, XBOX_INPUT_STATE *state);
++    BOOL (*connected)(DWORD port);
++    DWORD (*capabilities)(DWORD port, DWORD flags, XBOX_INPUT_CAPABILITIES *caps);
++    DWORD (*rumble)(DWORD port, const XBOX_VIBRATION *vibration);
++} XBOX_INPUT_PROVIDER;
++void xbox_InputSetProvider(const XBOX_INPUT_PROVIDER *provider);
+ 
+ /**
+  * Get the state of a controller.
+diff --git a/src/kernel/kernel_hal.c b/src/kernel/kernel_hal.c
+index 3a09ca8..0af0116 100644
+--- a/src/kernel/kernel_hal.c
++++ b/src/kernel/kernel_hal.c
+@@ -402,6 +402,27 @@ VOID __stdcall xbox_KeQuerySystemTime(PLARGE_INTEGER CurrentTime)
+  * of microseconds. Used for hardware timing (e.g., waiting for GPU).
+  * ============================================================================ */
+ 
++extern void recomp_timeline_dsp_enter(unsigned long microseconds);
++extern void recomp_timeline_dsp_exit(unsigned long microseconds,
++                                     unsigned long long actual_us);
++
++static unsigned long long s_stall_calls, s_stall_requested_us, s_stall_actual_us;
++static unsigned long long s_stall_dsp_calls;
++
++void xbox_StallStatsGet(unsigned long long *calls, unsigned long long *requested_us,
++                        unsigned long long *actual_us, unsigned long long *dsp_calls)
++{
++    if (calls) *calls = s_stall_calls;
++    if (requested_us) *requested_us = s_stall_requested_us;
++    if (actual_us) *actual_us = s_stall_actual_us;
++    if (dsp_calls) *dsp_calls = s_stall_dsp_calls;
++}
++
++void xbox_StallStatsReset(void)
++{
++    s_stall_calls = s_stall_requested_us = s_stall_actual_us = s_stall_dsp_calls = 0;
++}
++
+ VOID __stdcall xbox_KeStallExecutionProcessor(ULONG MicroSeconds)
+ {
+     LARGE_INTEGER freq, start, now;
+@@ -411,12 +432,23 @@ VOID __stdcall xbox_KeStallExecutionProcessor(ULONG MicroSeconds)
+ 
+     QueryPerformanceFrequency(&freq);
+     QueryPerformanceCounter(&start);
++    recomp_timeline_dsp_enter((unsigned long)MicroSeconds);
+ 
+     LONGLONG target_counts = (freq.QuadPart * MicroSeconds) / 1000000;
+ 
+     do {
+         QueryPerformanceCounter(&now);
+     } while ((now.QuadPart - start.QuadPart) < target_counts);
++
++    s_stall_calls++;
++    s_stall_requested_us += MicroSeconds;
++    if (MicroSeconds == 10000) s_stall_dsp_calls++;
++    if (freq.QuadPart)
++        s_stall_actual_us += (unsigned long long)
++            ((now.QuadPart - start.QuadPart) * 1000000 / freq.QuadPart);
++    recomp_timeline_dsp_exit((unsigned long)MicroSeconds,
++        (unsigned long long)((now.QuadPart - start.QuadPart) * 1000000
++                             / (freq.QuadPart ? freq.QuadPart : 1)));
+ }
+ 
+ /* ============================================================================
+diff --git a/src/kernel/xbox_memory_layout.c b/src/kernel/xbox_memory_layout.c
+index 7217012..75f11fd 100644
+--- a/src/kernel/xbox_memory_layout.c
++++ b/src/kernel/xbox_memory_layout.c
+@@ -6,8 +6,10 @@
+  * absolute address (e.g., mov eax, [0x004D532C]).
+  *
+  * Implementation:
+- * 1. VirtualAlloc a contiguous region at XBOX_BASE_ADDRESS
+- * 2. Copy .rdata and initialized .data from the XBE
++ * 1. Map the guest address space (XBOX_MAP_START is 0) at a chosen host base;
++ *    guest VA v is read at v + g_memory_offset, where the offset is
++ *    base - XBOX_MAP_START.
++ * 2. Copy .rdata and initialized .data from the XBE (at XBOX_BASE_ADDRESS)
+  * 3. Zero-fill the BSS region
+  * 4. Set memory protection (read-only for .rdata)
+  */
+@@ -23,6 +25,13 @@
+ #include <stdlib.h>
+ #include <string.h>
+ #include <setjmp.h>
++
++/* The pure window builder in the header cannot include kernel.h; these aliases
++ * must stay the arena's real constants. */
++typedef char xbox_guest_contig_base_matches[
++    XBOX_GUEST_CONTIG_BASE == XBOX_CONTIG_BASE ? 1 : -1];
++typedef char xbox_guest_contig_size_matches[
++    XBOX_GUEST_CONTIG_SIZE == XBOX_CONTIG_SIZE ? 1 : -1];
+ #if !defined(_WIN32)
+ #include <unistd.h>   /* _exit */
+ #endif
+@@ -46,7 +55,7 @@
+ 
+ static void *g_memory_base = NULL;
+ static size_t g_memory_size = 0;
+-static ptrdiff_t g_memory_offset = 0;  /* actual_base - XBOX_BASE_ADDRESS */
++static ptrdiff_t g_memory_offset = 0;  /* actual_base - XBOX_MAP_START (0) */
+ 
+ /* Actual mapped RAM for this run; see the header. Default retail 64 MB. */
+ size_t g_xbox_total_ram = XBOX_TOTAL_RAM;
+@@ -111,14 +120,12 @@ static void *g_tiled_view = NULL;
+ static void *g_contig_memory = NULL;
+ 
+ /* NV2A GPU register aperture (see MemoryLayoutInit). Backed as plain RAM so
+- * that D3D8 code linked into the title can poke it without faulting. */
+-#define XBOX_NV2A_BASE 0xFD000000u
+-#define XBOX_NV2A_SIZE (16u * 1024u * 1024u)
++ * that D3D8 code linked into the title can poke it without faulting. The base
++ * and size live in xbox_memory_layout.h with the other guest windows. */
+ static void *g_nv2a_memory = NULL;
+ 
+-/* MCPX southbridge register span: APU 0xFE800000 through NIC 0xFEF00000. */
+-#define XBOX_MCPX_BASE 0xFE800000u
+-#define XBOX_MCPX_SIZE (8u * 1024u * 1024u)
++/* MCPX southbridge register span: APU 0xFE800000 through NIC 0xFEF00000.
++ * Base and size are in xbox_memory_layout.h. */
+ static void *g_mcpx_memory = NULL;
+ 
+ /* Flash ROM. The console's 256 KB flash is mirrored through the top of the
+@@ -135,9 +142,8 @@ static void *g_mcpx_memory = NULL;
+  * reason: a read of zero is survivable, a fault is not. Zeros are not the
+  * console's BIOS, so a digest taken over this will not match one taken over
+  * real flash -- that is a separate question from whether the access should
+- * fault, and this is the half that has an obviously right answer. */
+-#define XBOX_FLASH_BASE 0xFF000000u
+-#define XBOX_FLASH_SIZE (1u * 1024u * 1024u)
++ * fault, and this is the half that has an obviously right answer. Base and size
++ * are in xbox_memory_layout.h. */
+ static void *g_flash_memory = NULL;
+ /* The contiguous window's backing section. It is a file mapping rather than
+  * plain committed memory for one reason: the tiled aperture has to be a
+@@ -1529,13 +1535,44 @@ static DWORD WINAPI nv2a_ack_thread(LPVOID param)
+                  * mirroring the wrong block leaves it spinning on a GET that
+                  * never moves. */
+                 if (s_nv2a_trace) {
++                    static unsigned long long trace_calls, trace_bytes, trace_ns;
++                    static LARGE_INTEGER trace_frequency;
++                    static DWORD trace_tid;
++                    char line[256];
+                     uint32_t g = *(volatile uint32_t *)
+                                  ((char *)regs + NV2A_USER_DMA_GET);
+-                    fprintf(stderr, "  [NV2A] DMA_PUT = 0x%08X  DMA_GET = "
++                    int line_len;
++                    LARGE_INTEGER trace_start = {0}, trace_end = {0};
++                    int trace_io = getenv("RECOMP_IO_TRACE") != NULL;
++                    if (trace_io) {
++                        if (!trace_frequency.QuadPart)
++                            QueryPerformanceFrequency(&trace_frequency);
++                        QueryPerformanceCounter(&trace_start);
++                    }
++                    line_len = snprintf(line, sizeof(line),
++                            "  [NV2A] DMA_PUT = 0x%08X  DMA_GET = "
+                             "0x%08X%s\n", put, g,
+                             g == put ? "" : "  (GPU behind)");
++                    if (line_len > 0) {
++                        fwrite(line, 1, (size_t)line_len, stderr);
++                        fflush(stderr);
++                    }
++                    if (trace_io) {
++                        QueryPerformanceCounter(&trace_end);
++                        trace_tid = GetCurrentThreadId();
++                        trace_calls++;
++                        if (line_len > 0) trace_bytes += (unsigned long long)line_len;
++                        trace_ns += (unsigned long long)
++                            ((trace_end.QuadPart - trace_start.QuadPart)
++                             * 1000000000LL / trace_frequency.QuadPart);
++                        if ((trace_calls & 0x7ffu) == 0)
++                            fprintf(stderr,
++                                "[IO-TRACE] source=nv2a_ack_thread tid=%lu "
++                                "dest=stderr calls=%llu bytes=%llu elapsed_us=%.3f\n",
++                                (unsigned long)trace_tid, trace_calls, trace_bytes,
++                                (double)trace_ns / 1000.0);
++                    }
+                 }
+-                fflush(stderr);
+             }
+         }
+         if (s_nv2a_trace) {
+@@ -3137,9 +3174,12 @@ BOOL xbox_MemoryLayoutInit(const void *xbe_data, size_t xbe_size)
+         g_nv2a_memory = layout_commit_at((LPVOID)nv2a_native, XBOX_NV2A_SIZE);
+         /* The pushbuffer survey rides on the same poll, so either
+          * variable arms it. */
++        /* PB_EXEC is the normal execution path, not a request for the
++         * per-submission [NV2A] DMA transcript.  That transcript performs an
++         * fflush per line and is far too expensive for gameplay measurements;
++         * keep it behind the explicit trace/scan switches. */
+         s_nv2a_trace = getenv("RECOMP_NV2A_TRACE") != NULL
+-                    || getenv("RECOMP_PB_SCAN") != NULL
+-                    || getenv("RECOMP_PB_EXEC") != NULL;
++                    || getenv("RECOMP_PB_SCAN") != NULL;
+         if (g_nv2a_memory) {
+             fprintf(stderr, "  NV2A register aperture: %u MB at Xbox VA "
+                     "0x%08X (zeroed, no register semantics)\n",
+@@ -3696,6 +3736,60 @@ BOOL xbox_IsXboxAddress(uintptr_t address)
+             address < XBOX_BASE_ADDRESS + g_memory_size);
+ }
+ 
++/* The mapped windows, in guest VAs: RAM and the mirrors that really mapped,
++ * then the contiguous window, the tiled alias and the three device apertures.
++ * Each is mapped at its guest VA plus g_memory_offset; the mirrors and the
++ * contiguous window are views of the same storage, so a title can reach a byte
++ * through any of them, but the host translation is the same for all. The pure
++ * builder (xbox_memory_layout.h) sorts and merges them; a mirror whose mapping
++ * failed is absent and leaves a real hole. */
++static size_t tiled_window_size(void)
++{
++    /* xbox_TiledApertureSize is the request; the view is clamped to the
++     * contiguous window's size (the same bytes, mapped twice). */
++    size_t size = xbox_TiledApertureSize();
++
++    if (size > XBOX_CONTIG_SIZE)
++        size = XBOX_CONTIG_SIZE;
++    return size;
++}
++
++unsigned xbox_GuestWindows(struct xbox_guest_window *windows, unsigned capacity)
++{
++    unsigned mirror, mask = 0;
++
++    if (!windows || !capacity)
++        return 0;
++    for (mirror = 0; mirror < XBOX_NUM_MIRRORS; mirror++)
++        if (g_mirror_views[mirror])
++            mask |= 1u << mirror;
++    return xbox_GuestWindowsBuild(windows, capacity,
++        (g_memory_base && g_memory_size) ? (uint64_t)g_memory_size : 0,
++        mask,
++        g_contig_memory ? (uint64_t)XBOX_CONTIG_SIZE : 0,
++        g_tiled_view ? (uint64_t)tiled_window_size() : 0,
++        g_nv2a_memory ? (uint64_t)XBOX_NV2A_SIZE : 0,
++        g_mcpx_memory ? (uint64_t)XBOX_MCPX_SIZE : 0,
++        g_flash_memory ? (uint64_t)XBOX_FLASH_SIZE : 0);
++}
++
++int xbox_GuestMemoryContains(uint32_t guest_va, uint64_t bytes)
++{
++    struct xbox_guest_window windows[1 + XBOX_NUM_MIRRORS + 5];
++    uint64_t hi = (uint64_t)guest_va + bytes;
++
++    if (xbox_GuestWindowsContain(windows,
++            xbox_GuestWindows(windows, (unsigned)(sizeof(windows) / sizeof(windows[0]))),
++            guest_va, bytes))
++        return 1;
++    /* Above the mirrors is guest_vmem: reserved as a whole, committed page by
++     * page. Accept only committed, non-guarded pages there; the whole range
++     * must be committed, so a hole is refused rather than read. */
++    if (guest_vmem_active() && hi > guest_va && hi <= 0x100000000ULL)
++        return xbox_GuestPagesCommitted(guest_va, hi, guest_vmem_query);
++    return 0;
++}
++
+ void *xbox_GetMemoryBase(void)
+ {
+     return g_memory_base;
+diff --git a/src/kernel/xbox_memory_layout.h b/src/kernel/xbox_memory_layout.h
+index 14eee45..81c2ee9 100644
+--- a/src/kernel/xbox_memory_layout.h
++++ b/src/kernel/xbox_memory_layout.h
+@@ -247,6 +247,84 @@ ptrdiff_t xbox_GetMemoryOffset(void);
+ size_t xbox_GetMappedSize(void);
+ void xbox_ProtectMirrorsForDebug(void);
+ 
++/* One contiguous guest address window whose bytes are readable at host
++ * guest_va + xbox_GetMemoryOffset(). lo and hi are guest VAs: [lo, hi). */
++struct xbox_guest_window
++{
++    uint64_t lo, hi;
++};
++
++/* TRUE when [va, va + bytes) lies wholly inside one of the windows. A range
++ * that crosses from one window into a hole is not contained: the host read
++ * would fault in the hole. bytes is a surface's byte extent, so 0 is not a
++ * surface and is not contained. Pure, so it can be checked without a mapped
++ * layout. */
++static inline int xbox_GuestWindowsContain(const struct xbox_guest_window *windows,
++                                           unsigned count, uint32_t va, uint64_t bytes)
++{
++    uint64_t lo = (uint64_t)va, hi = lo + bytes;
++    unsigned index;
++
++    if (!bytes || hi < lo || hi > 0x100000000ULL)
++        return 0;
++    for (index = 0; index < count; index++)
++        if (lo >= windows[index].lo && hi <= windows[index].hi)
++            return 1;
++    return 0;
++}
++
++/* The guest_vmem window above the mirrors is a reserve with per-page commits,
++ * not one readable range. This walks the regions guest_vmem_query returns and
++ * accepts only committed, non-guarded pages. It is kept here, pure, so the
++ * page walk can be tested without a mapped layout. */
++#define XBOX_GUEST_MEM_COMMIT     0x1000u
++#define XBOX_GUEST_PAGE_NOACCESS  0x01u
++#define XBOX_GUEST_PAGE_GUARD     0x100u
++typedef int (*xbox_guest_region_query)(uint32_t address, uint32_t info[7]);
++static inline int xbox_GuestPagesCommitted(uint64_t lo, uint64_t hi,
++                                           xbox_guest_region_query query)
++{
++    uint64_t page;
++
++    if (!query || hi <= lo || hi > 0x100000000ULL)
++        return 0;
++    page = lo & ~(uint64_t)0xFFF;
++    while (page < hi)
++    {
++        uint32_t info[7];
++        uint64_t next;
++
++        if (!query((uint32_t)page, info))
++            return 0;
++        if (info[4] != XBOX_GUEST_MEM_COMMIT ||
++            (info[5] & (XBOX_GUEST_PAGE_NOACCESS | XBOX_GUEST_PAGE_GUARD)) != 0)
++            return 0;
++        next = (uint64_t)info[0] + info[3];
++        if (next <= page)
++            return 0;
++        page = next;
++    }
++    return 1;
++}
++
++/* Fill the windows this runtime has actually mapped (a window whose mapping
++ * failed is absent). Returns the number written, at most capacity. */
++unsigned xbox_GuestWindows(struct xbox_guest_window *windows, unsigned capacity);
++
++/* TRUE when [guest_va, guest_va + bytes) is guest memory mapped at
++ * guest_va + xbox_GetMemoryOffset().
++ *
++ * Host code that dereferences a 32-bit address taken from the guest or from a
++ * GPU stream uses this first: an unmapped address faults in this process
++ * rather than in the title. It answers only whether those bytes are readable;
++ * it does not translate, clamp, or redirect. (A physical address below the RAM
++ * size is also a RAM guest VA here and is contained as such; the executor's
++ * dma_resolve maps physical addresses into the contiguous window before they
++ * reach a frame.) A value outside every window has no mapping, so FALSE is the
++ * only answer that keeps the host alive. With RECOMP_EXT_VMA the committed
++ * pages of the guest_vmem window are accepted too; reserved pages are not. */
++int xbox_GuestMemoryContains(uint32_t guest_va, uint64_t bytes);
++
+ /* Trapped hardware registers (APU, AC'97 bus master, USB OHCI). A title's
+  * fault handler calls one of these first and resumes the thread when it
+  * returns 1; only 0 is a crash. void * keeps windows.h and ucontext.h out of
+@@ -510,6 +588,103 @@ extern RECOMP_TLS uint32_t g_fs_base;
+  * surface through the tiled address and reads it back through the normal one. */
+ #define XBOX_TILED_BASE     0xF0000000u
+ 
++/* The other windows xbox_MemoryLayoutInit maps, by guest VA. The contiguous
++ * base/size are kernel.h's XBOX_CONTIG_*; these aliases let the pure window
++ * builder below be tested without including kernel.h, and the .c asserts they
++ * are equal at build time. */
++#define XBOX_GUEST_CONTIG_BASE 0x80000000u
++#define XBOX_GUEST_CONTIG_SIZE (64u * 1024u * 1024u)
++#define XBOX_NV2A_BASE 0xFD000000u
++#define XBOX_NV2A_SIZE (16u * 1024u * 1024u)
++#define XBOX_MCPX_BASE 0xFE800000u
++#define XBOX_MCPX_SIZE (8u * 1024u * 1024u)
++#define XBOX_FLASH_BASE 0xFF000000u
++#define XBOX_FLASH_SIZE (1u * 1024u * 1024u)
++
++/* The pure part of xbox_GuestWindows: build the window list for a layout
++ * without consulting or mapping anything. ram_size is 0 when the RAM view is
++ * absent; mirror_mask has a bit per mapped mirror; each aperture size is 0
++ * when that view is absent. Adjacent or overlapping windows are one range
++ * (every view is at its guest VA plus the same offset, so guest adjacency is
++ * host adjacency); this makes 128 MB layouts with skipped overlap mirrors
++ * merge the same way the mapping placed them, and leaves a real hole where a
++ * view is missing. Returns the number written, at most capacity. */
++static inline void xbox_GuestWindowAdd(struct xbox_guest_window *windows, unsigned *count,
++                                       unsigned capacity, uint64_t lo, uint64_t hi)
++{
++    if (*count >= capacity || hi <= lo)
++        return;
++    windows[*count].lo = lo;
++    windows[*count].hi = hi;
++    (*count)++;
++}
++
++static inline unsigned xbox_GuestWindowsBuild(struct xbox_guest_window *windows, unsigned capacity,
++                                              uint64_t ram_size, unsigned mirror_mask,
++                                              uint64_t contig_size, uint64_t tiled_size,
++                                              uint64_t nv2a_size, uint64_t mcpx_size,
++                                              uint64_t flash_size)
++{
++    unsigned count = 0, mirror, out = 0;
++    uint64_t lo;
++
++    if (!windows || !capacity)
++        return 0;
++    if (ram_size)
++    {
++        xbox_GuestWindowAdd(windows, &count, capacity, 0, ram_size);
++        for (mirror = 0; mirror < XBOX_NUM_MIRRORS; mirror++)
++        {
++            if (!(mirror_mask & (1u << mirror)))
++                continue;
++            lo = (uint64_t)(mirror + 1) * ram_size;
++            xbox_GuestWindowAdd(windows, &count, capacity, lo, lo + ram_size);
++        }
++    }
++    if (contig_size)
++        xbox_GuestWindowAdd(windows, &count, capacity, XBOX_GUEST_CONTIG_BASE,
++                            (uint64_t)XBOX_GUEST_CONTIG_BASE + contig_size);
++    if (tiled_size)
++        xbox_GuestWindowAdd(windows, &count, capacity, XBOX_TILED_BASE,
++                            (uint64_t)XBOX_TILED_BASE + tiled_size);
++    if (nv2a_size)
++        xbox_GuestWindowAdd(windows, &count, capacity, XBOX_NV2A_BASE,
++                            (uint64_t)XBOX_NV2A_BASE + nv2a_size);
++    if (mcpx_size)
++        xbox_GuestWindowAdd(windows, &count, capacity, XBOX_MCPX_BASE,
++                            (uint64_t)XBOX_MCPX_BASE + mcpx_size);
++    if (flash_size)
++        xbox_GuestWindowAdd(windows, &count, capacity, XBOX_FLASH_BASE,
++                            (uint64_t)XBOX_FLASH_BASE + flash_size);
++    /* insertion sort by lo: the RAM mirrors can extend past the contiguous
++     * window in a 128 MB layout, so the add order is not always ascending */
++    for (mirror = 1; mirror < count; mirror++)
++    {
++        struct xbox_guest_window key = windows[mirror];
++        unsigned at = mirror;
++
++        while (at && windows[at - 1].lo > key.lo)
++        {
++            windows[at] = windows[at - 1];
++            at--;
++        }
++        windows[at] = key;
++    }
++    for (mirror = 0; mirror < count; mirror++)
++    {
++        if (out && windows[mirror].lo <= windows[out - 1].hi)
++        {
++            if (windows[mirror].hi > windows[out - 1].hi)
++                windows[out - 1].hi = windows[mirror].hi;
++        }
++        else
++        {
++            windows[out++] = windows[mirror];
++        }
++    }
++    return out;
++}
++
+ /**
+  * Allocate from the Xbox heap. Returns an Xbox VA, or 0 on failure.
+  * Alignment must be a power of 2 (minimum 4).
+diff --git a/src/usb/usb_gamepad.c b/src/usb/usb_gamepad.c
+index bc04e83..a4ceaba 100644
+--- a/src/usb/usb_gamepad.c
++++ b/src/usb/usb_gamepad.c
+@@ -320,6 +320,7 @@ typedef struct {
+ 
+ static PadStep s_script[PAD_SCRIPT_MAX];
+ static int     s_script_len = -1;
++static int     s_script_exclusive;
+ 
+ /* Set by the host when the framebuffer is running.  Frame schedules are in
+  * presented flips, which makes captures independent of wall-clock speed. */
+@@ -419,6 +420,7 @@ static void pad_script_load(void)
+     const char *spec = getenv("RECOMP_PAD_SCRIPT");
+ 
+     s_script_len = 0;
++    s_script_exclusive = spec && *spec;
+     if (!spec || !*spec)
+         return;
+     if (spec[0] == '@') {
+@@ -583,6 +585,17 @@ int usb_gamepad_report(int pad, uint8_t *out, int max)
+     out[0] = 0;
+     out[1] = 20;
+ 
++    /* A startup timeline is a deterministic replay, so physical input must
++     * never enter its reports (including optional diagnostic probes). Cache
++     * this mode with the script; live-only sessions retain their usual merge. */
++    if (s_script_len < 0)
++        pad_script_load();
++    if (s_script_exclusive) {
++        out[2] = pad == 0 ? synth : 0;
++        pad_script_apply(pad, out);
++        return 20;
++    }
++
+     /* A disconnected host pad is not an error here: the device is present on
+      * the bus either way, it just reports nothing pressed. */
+     /* RECOMP_INPUT_DIAG: the whole chain on one line, once a second.
+diff --git a/src/video/fb_present.c b/src/video/fb_present.c
+index a8205d1..3e58713 100644
+--- a/src/video/fb_present.c
++++ b/src/video/fb_present.c
+@@ -21,6 +21,10 @@
+ #include <stdio.h>
+ #include <stdlib.h>
+ #include <string.h>
++
++static void trace_fb_write(const char *source, const char *path,
++                          unsigned bytes, LARGE_INTEGER start,
++                          LARGE_INTEGER end, LARGE_INTEGER frequency);
+ /* Which keys are down, for the pad stand-in in src/input: this window
+  * records them in the shared key table (src/input/keyboard.c).
+  *
+@@ -30,6 +34,7 @@
+  * is the thing that receives the keys, so that is what has to remember
+  * them. */
+ #include "keyboard.h"   /* src/input */
++#include "kernel/xbox_memory_layout.h"
+ 
+ extern ptrdiff_t xbox_GetMemoryOffset(void);
+ 
+@@ -51,6 +56,9 @@ static uint32_t     *s_rgb;           /* converted 32-bit copy for GDI */
+ static uint32_t     *s_present[2];
+ static volatile LONG s_present_idx = -1;   /* -1 until the first flip */
+ 
++static void fb_source_write_begin(void);
++static void fb_source_write_end(void);
++
+ void xbox_FramebufferWindowSet(uint32_t fb_va, uint32_t pitch)
+ {
+     /* RECOMP_FB_VA pins the window to one guest address instead of following
+@@ -59,9 +67,11 @@ void xbox_FramebufferWindowSet(uint32_t fb_va, uint32_t pitch)
+      * it at memory known to have content settles that. */
+     const char *pin = getenv("RECOMP_FB_VA");
+ 
++    fb_source_write_begin();
+     s_fb_va = pin ? (uint32_t)strtoul(pin, NULL, 0) : fb_va;
+     if (pitch)
+         s_fb_pitch = pitch;
++    fb_source_write_end();
+ }
+ 
+ /* Vertical anti-aliasing factor of the surface being shown: 2 for 2x2, where
+@@ -69,22 +79,209 @@ void xbox_FramebufferWindowSet(uint32_t fb_va, uint32_t pitch)
+  * everything else (2x1 included). Only the pushbuffer executor knows it. */
+ static uint32_t s_fb_aa_sy = 1;
+ 
++/* The source is published by the executor and read by the window thread. Read
++ * all three fields as one snapshot: a check for one (va, pitch, aa) must never
++ * be followed by a copy through another. Writers are the executor's Set/SetAA
++ * calls (single writer thread); odd sequence means a write is in progress. If
++ * the window cannot get a clean read in a bounded number of tries, it still
++ * uses the one torn triple for both check and read, so the address/extent
++ * pairing stays safe even though that frame may mix two updates. */
++static volatile LONG s_fb_source_seq;
++
++static void fb_source_write_begin(void)
++{
++    InterlockedIncrement(&s_fb_source_seq);
++}
++
++static void fb_source_write_end(void)
++{
++    InterlockedIncrement(&s_fb_source_seq);
++}
++
++static void fb_source_read(uint32_t *va, uint32_t *pitch, uint32_t *aa_sy)
++{
++    LONG before, after;
++    unsigned tries = 0;
++
++    do {
++        before = InterlockedCompareExchange(&s_fb_source_seq, 0, 0);
++        *va = s_fb_va;
++        *pitch = s_fb_pitch;
++        *aa_sy = s_fb_aa_sy;
++        after = InterlockedCompareExchange(&s_fb_source_seq, 0, 0);
++    } while ((before != after || (before & 1)) && ++tries < 64);
++}
++
+ void xbox_FramebufferWindowSetAA(uint32_t sy)
+ {
++    fb_source_write_begin();
+     s_fb_aa_sy = sy ? sy : 1;
++    fb_source_write_end();
++}
++
++/* Bytes a frame with this immutable snapshot reads: the last row's active
++ * pixels, not its padding. 0 means an unsupported pitch (not 2/4/8 bytes a
++ * pixel, or a row wider than its pitch); such a frame is shown black, and the
++ * guest source is never touched. */
++static uint64_t fb_source_bytes(unsigned width, unsigned height, uint32_t pitch,
++                                uint32_t bpp, uint32_t aa_sy)
++{
++    uint64_t row;
++
++    if (!width || !height || (bpp != 2 && bpp != 4 && bpp != 8))
++        return 0;
++    if (bpp == 8 && !aa_sy)
++        return 0;
++    row = (uint64_t)width * bpp;
++    if (row > pitch)
++        return 0;
++    return (uint64_t)(height - 1) * pitch * (bpp == 8 ? aa_sy : 1) + row;
++}
++
++/* Convert one frame from an immutable snapshot into dst. pitch and aa_sy are
++ * parameters, never re-read from the globals: the extent that was checked and
++ * the rows read here are the same snapshot. The source is not read for an
++ * unsupported bpp: such a frame is written black without forming a pointer. */
++static void fb_convert_rows(const uint8_t *src, uint32_t bpp, uint32_t pitch,
++                            uint32_t aa_sy, uint32_t *dst, unsigned width,
++                            unsigned height)
++{
++    uint32_t x, y;
++
++    for (y = 0; y < height; y++)
++    {
++        uint32_t *out = dst + (size_t)y * width;
++
++        if (bpp == 4 && src)
++        {
++            memcpy(out, src + (size_t)y * pitch, (size_t)width * 4);
++        }
++        else if (bpp == 8 && src && aa_sy)
++        {
++            const uint32_t *p = (const uint32_t *)
++                (src + (size_t)y * pitch * aa_sy);
++            for (x = 0; x < width; x++)
++                out[x] = p[x * 2];
++        }
++        else if (bpp == 2 && src)
++        {
++            const uint16_t *p = (const uint16_t *)(src + (size_t)y * pitch);
++            for (x = 0; x < width; x++)
++            {
++                uint16_t v = p[x];
++                uint32_t r = (uint32_t)((v >> 11) & 0x1F) * 255u / 31u;
++                uint32_t g = (uint32_t)((v >>  5) & 0x3F) * 255u / 63u;
++                uint32_t b = (uint32_t)( v        & 0x1F) * 255u / 31u;
++                out[x] = (r << 16) | (g << 8) | b;
++            }
++        }
++        else
++        {
++            memset(out, 0, (size_t)width * 4);
++        }
++    }
++}
++
++/* Classify a frame source from one (va, pitch, aa_sy) snapshot:
++ *   1  valid bpp and the exact extent is mapped guest memory
++ *   0  unsupported bpp/geometry: present black, do not touch va
++ *  -1  valid bpp but the extent is not mapped: refuse the copy
++ * bpp and bytes are returned for the caller's conversion, which must use
++ * exactly these values. */
++static int fb_frame_source_wh(uint32_t va, uint32_t pitch, uint32_t aa_sy,
++                              unsigned width, unsigned height,
++                              uint32_t *bpp_out, uint64_t *bytes_out)
++{
++    uint32_t bpp = width ? pitch / width : 0;
++    uint64_t bytes = fb_source_bytes(width, height, pitch, bpp, aa_sy);
++
++    if (bpp_out)
++        *bpp_out = bpp;
++    if (bytes_out)
++        *bytes_out = bytes;
++    if (!bytes)
++        return 0;
++    return xbox_GuestMemoryContains(va, bytes) ? 1 : -1;
++}
++
++/* The one sequence the window uses: classify this (va, pitch, aa_sy) snapshot,
++ * then copy through the *same* bpp/pitch/aa values. A validity check never
++ * pairs with a copy of another frame's pitch or address. state 0 copies black
++ * without forming a source pointer; state -1 copies nothing. */
++static int fb_copy_frame(uint32_t va, uint32_t pitch, uint32_t aa_sy,
++                         uint32_t *dst, unsigned width, unsigned height,
++                         uint64_t *bytes_out)
++{
++    uint32_t bpp;
++    uint64_t bytes;
++    int state = fb_frame_source_wh(va, pitch, aa_sy, width, height,
++                                   &bpp, &bytes);
++
++    if (bytes_out)
++        *bytes_out = bytes;
++    if (state > 0)
++    {
++        const uint8_t *src =
++            (const uint8_t *)((uintptr_t)va + xbox_GetMemoryOffset());
++
++        fb_convert_rows(src, bpp, pitch, aa_sy, dst, width, height);
++    }
++    else if (state == 0)
++    {
++        fb_convert_rows(NULL, bpp, pitch, aa_sy, dst, width, height);
++    }
++    return state;
++}
++
++/* Test seams (framebuffer_source_test): the production path and these call the
++ * same helpers, with an explicit immutable snapshot instead of the globals. */
++uint64_t xbox_FramebufferSourceBytesTest(unsigned width, unsigned height,
++                                         uint32_t pitch, uint32_t aa_sy,
++                                         unsigned bpp)
++{
++    return fb_source_bytes(width, height, pitch, bpp, aa_sy);
++}
++
++int xbox_FramebufferFrameSourceTest(uint32_t va, uint32_t pitch, uint32_t aa_sy,
++                                    unsigned width, unsigned height,
++                                    uint32_t *bpp_out, uint64_t *bytes_out)
++{
++    return fb_frame_source_wh(va, pitch, aa_sy, width, height, bpp_out, bytes_out);
++}
++
++int xbox_FramebufferConvertTest(const uint8_t *src, unsigned width,
++                                unsigned height, uint32_t pitch, uint32_t aa_sy,
++                                unsigned bpp, uint32_t *dst)
++{
++    uint64_t bytes = fb_source_bytes(width, height, pitch, bpp, aa_sy);
++
++    fb_convert_rows(src, bpp, pitch, aa_sy, dst, width, height);
++    return bytes ? 1 : 0;
++}
++
++int xbox_FramebufferCopyFrameTest(uint32_t va, uint32_t pitch, uint32_t aa_sy,
++                                  uint32_t *dst, unsigned width, unsigned height,
++                                  uint64_t *bytes_out)
++{
++    return fb_copy_frame(va, pitch, aa_sy, dst, width, height, bytes_out);
+ }
+ 
+ /* Called by the pushbuffer executor when the title flips. */
+ void xbox_FramebufferWindowPresent(uint32_t fb_va, uint32_t pitch)
+ {
+-    const uint8_t *src;
+     LONG next;
+-    uint32_t bpp, x, y;
++    uint32_t aa_sy;
++    uint64_t bytes;
++    int state;
+ 
+     if (!s_fb_running || !fb_va || !pitch)
+         return;
+     if (getenv("RECOMP_FB_VA"))
+         return;                       /* pinned: leave the old path alone */
++    /* SetAA is called on this thread immediately before Present, so one read
++     * of the factor is the frame's factor. va and pitch are this call's
++     * arguments; fb_copy_frame uses the same bpp/pitch/aa for check and copy. */
++    aa_sy = s_fb_aa_sy;
+     next = (s_present_idx == 0) ? 1 : 0;
+     if (!s_present[next]) {
+         s_present[next] = (uint32_t *)calloc((size_t)s_fb_width * s_fb_height,
+@@ -92,33 +289,25 @@ void xbox_FramebufferWindowPresent(uint32_t fb_va, uint32_t pitch)
+         if (!s_present[next])
+             return;
+     }
+-    bpp = pitch / s_fb_width;
+-    src = (const uint8_t *)((uintptr_t)fb_va + xbox_GetMemoryOffset());
+-    for (y = 0; y < s_fb_height; y++) {
+-        const uint8_t *row = src + (size_t)y * pitch * (bpp == 8 ? s_fb_aa_sy : 1);
+-        uint32_t *dst = s_present[next] + (size_t)y * s_fb_width;
+-
+-        if (bpp == 4) {
+-            memcpy(dst, row, (size_t)s_fb_width * 4);
+-        } else if (bpp == 8) {
+-            /* 2x-wide anti-aliased 32-bit surface: every other pixel, as in
+-             * fb_convert. */
+-            const uint32_t *p = (const uint32_t *)row;
+-            for (x = 0; x < s_fb_width; x++)
+-                dst[x] = p[x * 2];
+-        } else if (bpp == 2) {
+-            const uint16_t *p = (const uint16_t *)row;
+-            for (x = 0; x < s_fb_width; x++) {
+-                uint16_t v = p[x];
+-                uint32_t r = (uint32_t)((v >> 11) & 0x1F) * 255u / 31u;
+-                uint32_t g = (uint32_t)((v >>  5) & 0x3F) * 255u / 63u;
+-                uint32_t b = (uint32_t)( v        & 0x1F) * 255u / 31u;
+-                dst[x] = (r << 16) | (g << 8) | b;
+-            }
+-        } else {
+-            memset(dst, 0, (size_t)s_fb_width * 4);
+-        }
++    state = fb_copy_frame(fb_va, pitch, aa_sy, s_present[next],
++                          s_fb_width, s_fb_height, &bytes);
++    if (state < 0) {
++        /* The source is not mapped: a canonical host range with no view, not a
++         * non-canonical one. Never clamp or redirect it. The caller has already
++         * counted and paced the flip (nv2a_pb_exec before this call), so the
++         * window keeps the last good frame while the guest proceeds: displayed
++         * frames and guest present counts can diverge. This keeps a corrupt
++         * source from faulting the host; it does not repair the pushbuffer or
++         * surface state that produced it. */
++        static volatile LONG said;
++        if (InterlockedIncrement(&said) <= 4)
++            fprintf(stderr, "  [FB] refusing to present guest surface "
++                    "0x%08X pitch %u (%llu bytes): no mapped guest window\n",
++                    fb_va, pitch, (unsigned long long)bytes);
++        return;
+     }
++    /* state 0 (unsupported pitch/bpp) has already written black, as it always
++     * did, without forming a source pointer. */
+     /* Published only once it is whole. */
+     InterlockedExchange(&s_present_idx, next);
+ }
+@@ -182,8 +371,13 @@ int xbox_FramebufferCapturePresented(const char *path)
+     uint32_t img = row * s_fb_height, total = 54u + img;
+     uint8_t hdr[54], *line;
+     uint32_t x, y;
++    LARGE_INTEGER trace_start, trace_end, trace_frequency;
+     if (!path || idx < 0 || !s_present[idx])
+         return -1;
++    if (getenv("RECOMP_IO_TRACE")) {
++        QueryPerformanceFrequency(&trace_frequency);
++        QueryPerformanceCounter(&trace_start);
++    }
+     f = fopen(path, "wb");
+     if (!f)
+         return -1;
+@@ -211,6 +405,11 @@ int xbox_FramebufferCapturePresented(const char *path)
+     }
+     free(line);
+     fclose(f);
++    if (getenv("RECOMP_IO_TRACE")) {
++        QueryPerformanceCounter(&trace_end);
++        trace_fb_write("xbox_FramebufferCapturePresented", path, total,
++                       trace_start, trace_end, trace_frequency);
++    }
+     return 0;
+ }
+ 
+@@ -311,48 +510,28 @@ static LRESULT CALLBACK fb_wndproc(HWND h, UINT m, WPARAM w, LPARAM l)
+     return DefWindowProcA(h, m, w, l);
+ }
+ 
+-/* The display formats an Xbox front buffer is actually set to. The pitch says
+- * how wide a row is in bytes, so pitch/width gives the pixel size; the exact
+- * component layout only matters for 16-bit, where 5:6:5 and 1:5:5:5 differ. */
+-static void fb_convert(const uint8_t *src, uint32_t bpp)
+-{
+-    uint32_t x, y;
+-
+-    for (y = 0; y < s_fb_height; y++) {
+-        const uint8_t *row = src + (size_t)y * s_fb_pitch
+-                           * (bpp == 8 ? s_fb_aa_sy : 1);
+-        uint32_t *dst = s_rgb + (size_t)y * s_fb_width;
+-
+-        if (bpp == 4) {
+-            memcpy(dst, row, (size_t)s_fb_width * 4);
+-        } else if (bpp == 8) {
+-            /* A 2x-wide anti-aliased 32-bit surface (pitch = 2 * width * 4):
+-             * take every other pixel. X-Men Legends renders its 640-wide
+-             * frame into a 1280-wide surface, which read as "8 bytes per
+-             * pixel" and showed black. */
+-            const uint32_t *p = (const uint32_t *)row;
+-            for (x = 0; x < s_fb_width; x++)
+-                dst[x] = p[x * 2];
+-        } else if (bpp == 2) {
+-            const uint16_t *p = (const uint16_t *)row;
+-            for (x = 0; x < s_fb_width; x++) {
+-                uint16_t v = p[x];
+-                uint32_t r = (uint32_t)((v >> 11) & 0x1F) * 255u / 31u;
+-                uint32_t g = (uint32_t)((v >>  5) & 0x3F) * 255u / 63u;
+-                uint32_t b = (uint32_t)( v        & 0x1F) * 255u / 31u;
+-                dst[x] = (r << 16) | (g << 8) | b;
+-            }
+-        } else {
+-            memset(dst, 0, (size_t)s_fb_width * 4);
+-        }
+-    }
+-}
++/* The display formats an Xbox front buffer is actually set to. fb_convert_rows
++ * takes the pitch/aa snapshot; the integer pitch/width class (2, 4, 8) is
++ * computed by fb_frame_source_wh. */
+ 
+ /* Write what the window is currently showing to a 24-bit BMP.
+  *
+  * A black window is ambiguous: it means either that the read path is wrong or
+  * that the title really did render black. Dumping the same converted pixels
+  * the window draws settles which, and does it without a screenshot. */
++static void trace_fb_write(const char *source, const char *path,
++                          unsigned bytes, LARGE_INTEGER start,
++                          LARGE_INTEGER end, LARGE_INTEGER frequency)
++{
++    if (!getenv("RECOMP_IO_TRACE"))
++        return;
++    fprintf(stderr,
++            "[IO-TRACE] source=%s tid=%lu dest=%s bytes=%u elapsed_us=%.3f\n",
++            source, (unsigned long)GetCurrentThreadId(), path, bytes,
++            (double)(end.QuadPart - start.QuadPart) * 1000000.0
++                / (double)frequency.QuadPart);
++}
++
+ int xbox_FramebufferDumpBmp(const char *path)
+ {
+     FILE *f;
+@@ -360,8 +539,13 @@ int xbox_FramebufferDumpBmp(const char *path)
+     uint32_t img = row * s_fb_height, total = 54u + img, y, x;
+     uint8_t hdr[54], *line;
+ 
++    LARGE_INTEGER trace_start, trace_end, trace_frequency;
+     if (!s_rgb || !s_fb_va)
+         return -1;
++    if (getenv("RECOMP_IO_TRACE")) {
++        QueryPerformanceFrequency(&trace_frequency);
++        QueryPerformanceCounter(&trace_start);
++    }
+     f = fopen(path, "wb");
+     if (!f)
+         return -1;
+@@ -387,6 +571,11 @@ int xbox_FramebufferDumpBmp(const char *path)
+     }
+     free(line);
+     fclose(f);
++    if (getenv("RECOMP_IO_TRACE")) {
++        QueryPerformanceCounter(&trace_end);
++        trace_fb_write("xbox_FramebufferDumpBmp", path, total,
++                       trace_start, trace_end, trace_frequency);
++    }
+     fprintf(stderr, "  [FBWIN] wrote %s (%ux%u from 0x%08X)\n",
+             path, s_fb_width, s_fb_height, s_fb_va);
+     return 0;
+@@ -453,15 +642,35 @@ static DWORD WINAPI fb_thread(LPVOID unused)
+             StretchDIBits(hdc, 0, 0, (int)s_fb_width, (int)s_fb_height,
+                           0, 0, (int)s_fb_width, (int)s_fb_height,
+                           s_rgb, &bi, DIB_RGB_COLORS, SRCCOPY);
+-        } else if (s_fb_va && s_fb_pitch && s_rgb) {
++        } else if (s_rgb) {
+             /* No flip yet, or pinned with RECOMP_FB_VA: read guest memory as
+-             * before, which is also what a title that never flips needs. */
+-            const uint8_t *src =
+-                (const uint8_t *)((uintptr_t)s_fb_va + xbox_GetMemoryOffset());
+-            fb_convert(src, s_fb_pitch / s_fb_width);
+-            StretchDIBits(hdc, 0, 0, (int)s_fb_width, (int)s_fb_height,
+-                          0, 0, (int)s_fb_width, (int)s_fb_height,
+-                          s_rgb, &bi, DIB_RGB_COLORS, SRCCOPY);
++             * before, which is also what a title that never flips needs. The
++             * source is one (va, pitch, aa) snapshot, used unchanged for the
++             * range check and the copy; nothing here re-reads the published
++             * globals. Only a mapped window is readable. */
++            uint32_t va, pitch, aa_sy;
++            uint64_t bytes;
++            int state;
++
++            fb_source_read(&va, &pitch, &aa_sy);
++            if (va && pitch) {
++                state = fb_copy_frame(va, pitch, aa_sy, s_rgb,
++                                      s_fb_width, s_fb_height, &bytes);
++                if (state >= 0) {
++                    StretchDIBits(hdc, 0, 0, (int)s_fb_width, (int)s_fb_height,
++                                  0, 0, (int)s_fb_width, (int)s_fb_height,
++                                  s_rgb, &bi, DIB_RGB_COLORS, SRCCOPY);
++                } else {
++                    static int said;
++                    if (!said) {
++                        said = 1;
++                        fprintf(stderr, "  [FB] not reading guest surface "
++                                "0x%08X pitch %u (%llu bytes): no mapped guest "
++                                "window\n", va, pitch,
++                                (unsigned long long)bytes);
++                    }
++                }
++            }
+         }
+         {
+             /* One dump a few seconds in, so the title has had time to render
+diff --git a/templates/runtime/recomp_types.h b/templates/runtime/recomp_types.h
+index 559f34d..20e1ce8 100644
+--- a/templates/runtime/recomp_types.h
++++ b/templates/runtime/recomp_types.h
+@@ -1048,14 +1048,11 @@ void recomp_abi_violation_log(uint32_t va, uint32_t ebx0, uint32_t esi0,
+     if (g_ebx != _ab || g_esi != _as || g_edi != _ad || g_esp < _ap + 4) \
+         recomp_abi_violation_log((va), _ab, _as, _ad, _ap); \
+ } while(0)
+-#elif defined(RECOMP_CALL_PROFILE)
+-/* Opt-in profiling: every direct call reports its target to the project, which
+- * keeps the counts (a project defines recomp_call_profile_hit). Diffing the counts
+- * of two situations shows which functions one of them runs and the other does not. */
+-void recomp_call_profile_hit(uint32_t va);
+-#define RECOMP_ABI_CALL(va, fn) do { recomp_call_profile_hit(va); (fn)(); } while(0)
+ #else
+-#define RECOMP_ABI_CALL(va, fn) (fn)()
++extern int recomp_call_profile_on;
++void recomp_call_profile_enter(uint32_t va);
++void recomp_call_profile_exit(uint32_t va);
++#define RECOMP_ABI_CALL(va, fn) do {     if (recomp_call_profile_on) {         recomp_call_profile_enter((uint32_t)(va));         (fn)();         recomp_call_profile_exit((uint32_t)(va));     } else {         (fn)();     } } while(0)
+ #endif
+ 
+ /* A guarded arm of an indirect call. When a recorded run saw a call site

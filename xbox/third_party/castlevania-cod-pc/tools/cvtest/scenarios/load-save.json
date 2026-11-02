@@ -1,0 +1,14 @@
+{
+  "name": "load-save",
+  "save": "first-save",
+  "note": "Continue from keep-save.json's save, made by either release: the title's cursor is on Continue, the hard disk's slot 1, Yes, then Hector in the save room 5.27 as he was",
+  "steps": [
+    {"press": "0:wait:11000", "shot": "title"},
+    {"press": "600:a,4000:wait", "shot": "continue", "note": "Continue: the load screen"},
+    {"press": "0:a,3000:wait", "shot": "slot"},
+    {"press": "0:a,3000:wait", "shot": "confirm"},
+    {"press": "0:a,5000:wait", "shot": "yes"},
+    {"until": "player.active and not loading and not menu", "timeout": 60, "poll_by": [["cutscene", "0:start,45f:wait"], ["modal", "0:a,30f:wait"]], "shot": "loaded", "expect": ["map == 5", "room == 27", "player.exp > 0", "player.hp > 0"]},
+    {"press": "0f:lsd:40f", "shot": "walk", "expect": ["not screen.flat"]}
+  ]
+}

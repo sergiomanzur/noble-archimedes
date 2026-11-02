@@ -10,6 +10,7 @@ therefore tied to frames, not wall-clock time.
 from __future__ import annotations
 
 import argparse
+import json
 import re
 import shutil
 import statistics
@@ -114,6 +115,8 @@ def main() -> int:
                     help="reuse --calibration (requires an explicit existing log)")
     ap.add_argument("--gpu-present", action="store_true",
                     help="enable RECOMP_GPU_PRESENT for the D3D11 backend")
+    ap.add_argument("--frame-stats", action="store_true",
+                    help="collect per-flip durations with the in-memory recorder")
     a = ap.parse_args()
     if a.gpu_present and a.backend != "d3d11":
         ap.error("--gpu-present requires --backend d3d11")
@@ -158,7 +161,10 @@ def main() -> int:
         mid = (fa + fb) // 2
         scene_flips.append((name, fa, fb, mid))
     capture = ",".join(str(mid) for *_, mid in scene_flips)
+    required_flip = max(fb for _, _, fb, _ in scene_flips)
+    wall_timeout = max(240, duration * 2)
     print(f"[frames] {[(n, a, b) for n, a, b, _ in scene_flips]}")
+    print(f"[completion] required_flip={required_flip} wall_timeout={wall_timeout}s")
 
     results = []
     for run in range(1, a.runs + 1):
@@ -167,7 +173,14 @@ def main() -> int:
         bench.run_one(bench.EXE_DEFAULT, rdir, frame_pad, duration, a.backend,
                       False, no_unique=False, no_gpu_stats=False,
                       capture_flips=capture, pad_frames=True,
-                      gpu_present=a.gpu_present)
+                      gpu_present=a.gpu_present, required_flip=required_flip,
+                      wall_timeout=wall_timeout,
+                      frame_stats=a.frame_stats)
+        status_path = rdir / "run_status.json"
+        status = json.loads(status_path.read_text()) if status_path.exists() else {}
+        if not status.get("complete", True):
+            print(f"  incomplete: max_flip={status.get('max_flip')} "
+                  f"required={required_flip} timed_out={status.get('timed_out')}")
         # Rename actual-present captures to the names compare_baseline expects.
         shots = []
         for name, fa, fb, mid in scene_flips:

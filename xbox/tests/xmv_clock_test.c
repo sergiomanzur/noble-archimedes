@@ -16,6 +16,7 @@ void xbox_FramebufferWindowSet(uint32_t a,uint32_t b) { (void)a;(void)b; }
 void xbox_FramebufferWindowPresent(uint32_t a,uint32_t b) { (void)a;(void)b; }
 void xbox_FramebufferWindowSetAA(uint32_t a) { (void)a; }
 void xbox_FramebufferWindowStart(void) {}
+uint32_t xbox_FramebufferFlipCount(void) { return 0; }
 extern int noble_field_status_hook(void);
 #define CHECK(x) do { if (!(x)) { fprintf(stderr,"failed: %s\n",#x); return 1; } } while(0)
 int main(void) {

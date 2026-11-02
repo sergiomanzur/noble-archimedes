@@ -1,0 +1,15 @@
+# Original Noble Archimedes assets
+
+Created for this project on 2026-11-02. No extracted game artwork, game icon, soundtrack, texture-pack artwork or copied melody is used here. The project's CC0 dedication applies to these original assets to the extent rights can be granted; it does not grant rights in game content or promise exclusive rights in generated imagery.
+
+`launcher-background.png` was generated with the built-in ImageGen tool from this prompt:
+
+> Create an original premium desktop launcher background illustration for a fan engineering project called Noble Archimedes. Landscape 1536x1024. A vast nocturnal stone observatory with graceful pointed arches, an intricate brass armillary sphere and drafting desk, distant mountains under a deep teal night sky, fine engraved geometry, restrained warm amber glow, painterly architectural concept art. No people. Dark, atmospheric, elegant, subtly gothic but wholly original. Composition: beautifully detailed focal observatory and armillary sphere on the right third; left two thirds are extremely dark teal with gentle fog and sparse stars, spacious calm negative space for readable launcher controls. Palette midnight blue-green #07191c, desaturated teal, antique brass #c3a570. No text, no letters, no logos, no emblems from existing games, no game characters, no weapons. Production-ready high quality illustration, no UI baked into image.
+
+`noble-icon.png` was generated with the built-in ImageGen tool with transparent background from this prompt:
+
+> Design one original desktop application icon for Noble Archimedes, a native game preservation engineering project. Square canvas 1024x1024 with transparent outside. A bold elegant circular brass armillary/astrolabe emblem framing a geometric capital A formed by drafting compass legs and a single small four-point star in its center. Strong midnight teal enamel disk inside a substantial antique gold ring, subtle dimensional metal bevels. Sophisticated restrained craftsmanship, clean symmetrical silhouette that remains legible at 32 pixels. Centered, emblem fills 82% of image, generous transparent margins. Simplify internal engraving, high contrast, no tiny ornaments. No words, no additional letters, no existing game symbols, no characters, no bats, no shields, no copyrighted game crest. Premium app icon, transparent background genuinely alpha, no shadow outside emblem, no mockup.
+
+The resulting icon is 1254x1254 RGBA. `noble-archimedes.ico` contains resized 16, 24, 32, 48, 64, 128 and 256 pixel versions, encoded with Pillow; this is format conversion of our own generated image.
+
+`launcher-theme.wav` is **The Quiet Orrery**, an original 32-second composition and deterministic synthesis using organ/celesta voices and circular echoes. It is synthesized locally, without a music model or existing audio samples. The complete score is `music-score.json`; regenerate with `python tools/branding/generate_music.py`. Stereo 44.1 kHz, signed 16-bit PCM, peak 20% of full scale.

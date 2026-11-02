@@ -13,6 +13,7 @@ void xbox_FramebufferWindowSet(uint32_t a,uint32_t b) { (void)a;(void)b; }
 void xbox_FramebufferWindowPresent(uint32_t a,uint32_t b) { published_va=a;published_pitch=b;published_count++; }
 void xbox_FramebufferWindowSetAA(uint32_t a) { (void)a; }
 void xbox_FramebufferWindowStart(void) {}
+uint32_t xbox_FramebufferFlipCount(void) { return 0; }
 static unsigned init_calls, present_calls, target_calls, draw_calls, constant_calls;
 static unsigned draw_args[5], target_args[2], constant_reg;
 static unsigned constant_data, constant_count;
@@ -21,6 +22,9 @@ static int readback_ok;
 static int copy_ok=1;
 static unsigned copy_args[5];
 static unsigned bound_shader;
+static unsigned input_pump_calls;
+static void fake_input_pump(void) { input_pump_calls++; }
+static unsigned texture_args[2], palette_args[2];
 static int fake_init(void) { init_calls++; return init_ok; }
 static void fake_offset(ptrdiff_t offset) { (void)offset; }
 static void fake_present(void) { present_calls++; }
@@ -31,6 +35,8 @@ static void fake_indexed_up(unsigned a,unsigned b,unsigned c,unsigned d,unsigned
 static void fake_constants(int reg,unsigned data,unsigned count) { constant_calls++; constant_reg=(unsigned)reg; constant_data=data;constant_count=count; draw_args[0]=data; draw_args[1]=count; }
 static unsigned fake_create(unsigned d,unsigned f,unsigned u) { (void)d;(void)f;(void)u;return 0x90001000; }
 static void fake_shader(unsigned handle) { bound_shader=handle; }
+static void fake_texture(unsigned stage, unsigned texture) { texture_args[0]=stage; texture_args[1]=texture; }
+static void fake_palette(unsigned stage, unsigned palette) { palette_args[0]=stage; palette_args[1]=palette; }
 static int fake_readback(unsigned surface) { (void)surface;return readback_ok; }
 static void fake_noop(void) {}
 static int fake_fixed(unsigned data,unsigned words,unsigned modes) {
@@ -49,7 +55,8 @@ static FARPROC WINAPI fake_proc(HMODULE module,LPCSTR name) {
     EXPORT("stream",fake_draw); EXPORT("indices",fake_target);
     EXPORT("draw_up",fake_up); EXPORT("draw_indexed_up",fake_indexed_up);
     EXPORT("vertex_constants",fake_constants); EXPORT("create_vertex_shader",fake_create);
-    EXPORT("vertex_shader",fake_shader); EXPORT("readback",fake_readback);
+    EXPORT("vertex_shader",fake_shader); EXPORT("texture",fake_texture); EXPORT("palette",fake_palette); EXPORT("readback",fake_readback);
+    EXPORT("readback_swap",fake_readback);
     EXPORT("fixed_function",fake_fixed);
     EXPORT("copy_rects",fake_copy);
     return (FARPROC)fake_noop;
@@ -78,6 +85,10 @@ void sub_003C3D10(void) {
 int main(void) {
     g_xbox_mem_offset=(ptrdiff_t)(uintptr_t)ram;
     _putenv_s("RECOMP_D3D8GL","1");
+    noble_d3d8_set_host_input_pump(fake_input_pump);
+    setup(0,0,0,0,0);
+    CHECK(noble_d3d8_guest_call(0x003B6520,8)==0);
+    CHECK(input_pump_calls==1); /* Main-thread events work before renderer init. */
     setup(0x30000,0x40000,0,0,0);
     CHECK(noble_d3d8_guest_call(0x003B6FB0,12)==0);
     CHECK(present_calls==0 && target_calls==0); /* Before device creation. */
@@ -119,6 +130,12 @@ int main(void) {
     setup(0x37000,0x38000,0x39000,0,0);
     CHECK(noble_d3d8_guest_call(0x003B86E0,20)==1);
     CHECK(MEM32(0x39000)==0x30001 && g_esp==0x10014);
+    setup(2,0x50000,0,0,0);
+    CHECK(noble_d3d8_guest_call(0x003B7820,8)==0);
+    CHECK(texture_args[0]==2 && texture_args[1]==0x50000);
+    setup(3,0x51000,0,0,0);
+    CHECK(noble_d3d8_guest_call(0x003B79D0,8)==0);
+    CHECK(palette_args[0]==3 && palette_args[1]==0x51000);
     setup(0x30001,0,0,0,0);
     CHECK(noble_d3d8_guest_call(0x003B8E30,8)==0);
     CHECK(bound_shader==0x90001000 && g_esp==0x10000);

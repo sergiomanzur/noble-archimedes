@@ -1,0 +1,15 @@
+{
+  "name": "record-courtyard-exit",
+  "after": "newgame.json",
+  "telemetry": 6,
+  "note": "Records routes/courtyard-exit.json with the bot (route.json plays it back): down the corridor from the first courtyard, a jump on the way, out of 5.1 onto the drawbridge (5.0). Then: python -I tools/cvtest/cvtest.py --make-route out/test/record-courtyard-exit-<time>/game/telemetry.jsonl courtyard-exit",
+  "steps": [
+    {"press": "0:walk=-5000/-8000:15000", "expect": ["bot.results == ['reached']"]},
+    {"press": "0:walk=-5000/-12000:15000", "expect": ["bot.results == ['reached']"]},
+    {"press": "0:walk=-5000/-16000:15000,30f:a:10f", "shot": "jumped", "expect": ["bot.results == ['reached']"]},
+    {"press": "0:walk=-5000/-22800:15000", "expect": ["bot.results == ['reached']"]},
+    {"press": "0:walk=-5000/-32000:8000", "expect": ["bot.results == ['room']"]},
+    {"until": "room == 0 and player.active and not loading and not cutscene", "timeout": 30, "poll_by": [["cutscene", "0:start,45f:wait"], ["menu", "0:b,30f:wait"]]},
+    {"press": "0:walk=-1000/-8300:5000", "shot": "in-5-0", "expect": ["room == 0"]}
+  ]
+}

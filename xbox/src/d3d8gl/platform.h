@@ -39,6 +39,7 @@ void *platform_contiguous_alloc(unsigned long size, unsigned long alignment,
                                 unsigned long physical_address, DWORD protect);
 void platform_contiguous_free(void *address);
 BOOL platform_is_contiguous(const void *address);
+BOOL platform_range_mapped(const void *address, size_t size);
 
 /* Guest pointers and resource Data words have different representations.
  * Export arguments are Xbox VAs; texture/vertex Data words below 64 MiB

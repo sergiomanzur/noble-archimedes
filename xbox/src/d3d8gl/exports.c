@@ -166,6 +166,7 @@ void noble_d3d8_draw_up_host(unsigned primitive, unsigned count, const void *ver
 void noble_d3d8_draw_indexed_up_host(unsigned primitive, unsigned count, const WORD *indices,
                                     const void *vertices, unsigned stride);
 int noble_d3d8_readback_host(D3DSurface *surface);
+int noble_d3d8_readback_swap_host(D3DSurface *surface);
 __declspec(dllexport) void noble_d3d8_draw_up(unsigned primitive, unsigned count,
                                              unsigned data, unsigned stride)
 {
@@ -195,6 +196,10 @@ __declspec(dllexport) void noble_d3d8_draw_indexed_up(unsigned primitive, unsign
 __declspec(dllexport) int noble_d3d8_readback(unsigned surface)
 {
     return noble_d3d8_readback_host((D3DSurface *)noble_guest_pointer(surface));
+}
+__declspec(dllexport) int noble_d3d8_readback_swap(unsigned surface)
+{
+    return noble_d3d8_readback_swap_host((D3DSurface *)noble_guest_pointer(surface));
 }
 
 void WINAPI D3DDevice_Begin(D3DPRIMITIVETYPE type);

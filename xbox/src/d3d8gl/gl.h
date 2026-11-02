@@ -136,6 +136,7 @@ this list to generate the guest's entry points */
 	X(glBeginQuery) \
 	X(glEndQuery) \
 	X(glGetQueryObjectuiv) \
+	X(glGetQueryObjectui64v) \
 	X(glGetInternalformativ)
 /* entry points of extensions, which a driver may lack: loaded where the
 context has the extension, never required (gl_functions.c). On ES 3.0 and
@@ -260,6 +261,7 @@ context has the extension, never required (gl_functions.c). On ES 3.0 and
 	X(glBeginQuery) \
 	X(glEndQuery) \
 	X(glGetQueryObjectuiv) \
+	X(glGetQueryObjectui64v) \
 	X(glMemoryBarrier) \
 	X(glCreateQueries) \
 	X(glIsQuery) \
@@ -387,6 +389,7 @@ pointers, sees the declarations without these aliases */
 #define glBeginQuery halo_glBeginQuery
 #define glEndQuery halo_glEndQuery
 #define glGetQueryObjectuiv halo_glGetQueryObjectuiv
+#define glGetQueryObjectui64v halo_glGetQueryObjectui64v
 #define glGetInternalformativ halo_glGetInternalformativ
 #else
 #define glGetString halo_glGetString
@@ -503,6 +506,7 @@ pointers, sees the declarations without these aliases */
 #define glBeginQuery halo_glBeginQuery
 #define glEndQuery halo_glEndQuery
 #define glGetQueryObjectuiv halo_glGetQueryObjectuiv
+#define glGetQueryObjectui64v halo_glGetQueryObjectui64v
 #define glMemoryBarrier halo_glMemoryBarrier
 #define glCreateQueries halo_glCreateQueries
 #define glIsQuery halo_glIsQuery

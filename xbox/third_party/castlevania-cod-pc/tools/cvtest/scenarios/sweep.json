@@ -1,0 +1,8 @@
+{
+  "name": "sweep",
+  "after": "newgame.json",
+  "note": "Every room of every map: warped to, waited on until Hector is in play, screenshot kept. Catches rooms that crash, hang, log errors or draw one flat colour. Give \"maps\" to sweep fewer.",
+  "steps": [
+    {"sweep": {}}
+  ]
+}

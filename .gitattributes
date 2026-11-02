@@ -1,3 +1,6 @@
 # Unified diff context and retained license notices contain intentional spaces.
 patches/ps2recomp-progress.patch -whitespace
 licenses/* -whitespace
+patches/xbox-modern-input-provider.patch -whitespace
+patches/xboxrecomp-local-runtime.patch -whitespace
+xbox/third_party/castlevania-cod-pc/** -whitespace

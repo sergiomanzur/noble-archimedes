@@ -1,0 +1,9 @@
+{
+  "name": "perf",
+  "after": "newgame.json",
+  "note": "Where a frame's time goes, in the heaviest rooms found (10.29 and 9.22 draw some 1,480 times a frame, most rooms 300 to 500) and two ordinary ones: 5 s stood in each, with the SDK's timings (XBE_PERF). The report ends with them, the slowest room first. On 2026-10-30 every room held 60 fps with under 3 ms of the renderer's work a frame.",
+  "perf": true,
+  "steps": [
+    {"sweep": {"rooms": ["10.29", "9.22", "11.16", "10.19", "9.8", "10.12", "11.1", "5.1", "6.1"], "hold": 300}}
+  ]
+}

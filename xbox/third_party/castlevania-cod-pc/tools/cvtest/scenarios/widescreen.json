@@ -1,0 +1,11 @@
+{
+  "name": "widescreen",
+  "after": "newgame.json",
+  "note": "Screens the game draws 4:3 that reach the sides of a wide screen (src/common/widescreen.cpp): the title and pause menu shots of newgame.json, the first-save recording with each box on the way kept (the save point's, and the Memorial Ticket's when the enemy drops it: its dimmed panel), then the map screen.",
+  "steps": [
+    {"route": "first-save", "box_shots": true, "shot": "route-end",
+     "expect": ["map == 5", "room == 2", "not menu", "not modal"]},
+    {"press": "0:back,2000:wait", "shot": "map", "note": "the map screen"},
+    {"press": "0:back,1500:wait", "expect": ["not menu"]}
+  ]
+}

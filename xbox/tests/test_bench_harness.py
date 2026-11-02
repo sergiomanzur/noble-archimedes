@@ -19,6 +19,8 @@ with patch.dict(sys.modules, {"bench": bench}):
         "xbox_frame_bench", ROOT / "xbox" / "tools" / "frame_bench.py")
     frame_bench = importlib.util.module_from_spec(frame_spec)
     frame_spec.loader.exec_module(frame_bench)
+sys.path.insert(0, str(ROOT / "xbox" / "tools"))
+import summarize_runs
 
 
 def calibration_log():
@@ -60,6 +62,12 @@ class BenchHarnessTest(unittest.TestCase):
         r = bench.summarize("x", 1000, 3000, samples)
         self.assertEqual(r.median_fps(), 59.0)
         self.assertEqual(r.low1(), 58.0)
+
+    def test_exact_capture_names_are_paired_with_flips(self):
+        pairs = bench.capture_pairs("100,200,300",
+                                    [("a", 0, 10), ("b", 10, 20), ("c", 20, 30)])
+        self.assertEqual(pairs, [("a", 100), ("b", 200), ("c", 300)])
+        self.assertEqual(bench.capture_pairs("", bench.MAIN_SCENES), [])
 
     def test_scene_definitions_are_ordered(self):
         for name, a, b in bench.MAIN_SCENES:
@@ -230,6 +238,20 @@ class BenchHarnessTest(unittest.TestCase):
                 self.assertEqual(raised.exception.code, 2)
                 launch.assert_not_called()
 
+
+    def test_summary_medians_and_missing_scenes(self):
+        self.assertEqual(summarize_runs.median_or_none([45, 49, None]), 47)
+        self.assertEqual(summarize_runs.median_or_none([39.5, 46, 34]), 39.5)
+        self.assertIsNone(summarize_runs.median_or_none([None, None]))
+
+    def test_incomplete_runs_are_excluded(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            good = root / "run1"; good.mkdir()
+            (good / "run_status.json").write_text('{"complete": true, "max_flip": 10}')
+            bad = root / "run2"; bad.mkdir()
+            (bad / "run_status.json").write_text('{"complete": false, "timed_out": true, "max_flip": 5}')
+            self.assertEqual([p.name for p in summarize_runs.completed_run_dirs(root)], ["run1"])
 
 if __name__ == "__main__":
     unittest.main()

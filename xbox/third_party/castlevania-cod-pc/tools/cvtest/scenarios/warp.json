@@ -1,0 +1,14 @@
+{
+  "name": "warp",
+  "after": "newgame.json",
+  "note": "The test warp (src/game/warp.cpp): Hector sent to other rooms of the first map and to another map.",
+  "steps": [
+    {"press": "0:warp=5.2,10f:wait:20f", "note": "warp to map 5 room 2"},
+    {"until": "room == 2 and player.active", "timeout": 30, "shot": "5-2", "expect": ["map == 5", "not screen.flat"]},
+    {"press": "0:warp=5.3,10f:wait:20f", "note": "warp to map 5 room 3"},
+    {"until": "room == 3 and player.active", "timeout": 30, "shot": "5-3", "expect": ["map == 5", "not screen.flat"]},
+    {"press": "0:warp=6.1,10f:wait:20f", "note": "warp to map 6 room 1"},
+    {"until": "map == 6 and player.active", "timeout": 30, "shot": "6-1", "expect": ["room == 1", "not screen.flat"]},
+    {"press": "0f:lsu:60f", "shot": "6-1-walk", "expect": ["player.active"]}
+  ]
+}

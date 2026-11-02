@@ -78,3 +78,13 @@ __pycache__/
 *.bmp
 *.webp
 *.suprx
+
+# Local dependency checkouts and unpublished game-derived research.
+/tools/xboxrecomp/
+/tools/rea/
+/tools/native_render/
+/tools/native_vu/
+/tools/ghidra_project/
+/.superpowers/
+/frames/
+/local/

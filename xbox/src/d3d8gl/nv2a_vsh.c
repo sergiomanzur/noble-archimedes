@@ -342,6 +342,9 @@ static const char shader_prologue[] =
 	"uniform float point_size;\n"
 	/* columns the menus shift by to center on a wide screen (d3d8_gl.c) */
 	"uniform float screen_offset;\n"
+	"uniform float wide_clip_scale;\n"
+	"uniform float wide_clip_offset;\n"
+	"uniform float wide_fov_scale;\n"
 	/* a fade above a height on the model (d3d8_gl_set_height_fade): off
 	while w is zero */
 	"uniform vec4 height_fade;\n"
@@ -579,6 +582,8 @@ char *nv2a_vertex_shader_to_glsl(const DWORD *instructions, unsigned long instru
 		which the clipper also takes. */
 		"\tif (!(abs(position.w) > 0.0))\n"
 		"\t\tposition = vec4(0.0, 0.0, 0.0, -1.0);\n"
+		"\tif (wide_clip_scale != 1.0) position.x = position.x * wide_clip_scale - wide_clip_offset * position.w;\n"
+		"\tif (wide_fov_scale != 1.0) position.xy *= wide_fov_scale;\n"
 		"\tgl_Position = position;\n"
 #ifdef HALO_GLES
 		/* what glClipControl(GL_UPPER_LEFT, GL_ZERO_TO_ONE) does on desktop
@@ -622,6 +627,8 @@ char *nv2a_fixed_function_glsl(void)
 	xgpu_text_append(&text,
 		"void main()\n{\n"
 		"\tgl_Position = v0_in;\n"
+		"\tif (wide_clip_scale != 1.0) gl_Position.x = gl_Position.x * wide_clip_scale - wide_clip_offset * gl_Position.w;\n"
+		"\tif (wide_fov_scale != 1.0) gl_Position.xy *= wide_fov_scale;\n"
 #ifdef HALO_GLES
 		"\tgl_Position.y = -gl_Position.y;\n"
 		"\tgl_Position.z = 2.0 * gl_Position.z - gl_Position.w;\n"

@@ -1,4 +1,65 @@
-# Build and play — developer workflow
+# Build and play
+
+The **primary Noble Archimedes build is the Xbox D3D12 application**. The separate PS2 workflow appears below and remains experimental. Do not mix generated code, dependencies or game inputs between them.
+
+## Primary Xbox prerequisites
+
+Use Windows x64 with Python 3, Git, CMake 3.25+, Ninja, LLVM Clang/LLD, Visual Studio C++ Build Tools and a Windows SDK. Run from a developer environment that can find the C++ toolchain. The imported backend was built locally with Clang 22.1.8 and the VS 2022 Build Tools environment. Playing requires a Direct3D 12 capable graphics adapter and current driver. Dependencies are fetched during preparation/configuration; no proprietary Xbox SDK is required or provided.
+
+Clone the repository and provide an extracted copy of your own **USA original Xbox** disc in `extracted/`: `default.xbe`, `data/`, `movie/`, `sound/`. PS2 discs cannot supply this input. The USA XBE accepted by the helper has SHA-1 `423bc19b7ced263570dce5e7cd5d81954dfbe13c`. The helper currently checks an unmodified executable; the upstream runtime's broader patched-header/ISO handling does not imply the build wrapper accepts every input layout.
+
+```powershell
+git clone https://github.com/sergiomanzur/noble-archimedes.git
+cd noble-archimedes
+& ".\Build Noble Archimedes.cmd" --full-game
+& ".\Launch Noble Archimedes.cmd"
+```
+
+`Build Noble Archimedes.cmd` compiles the locally translated game DLL as well as the runtime/launcher; it can take time. To defer game-DLL compilation to first launch, use `Build Xbox D3D12.cmd` without `--full-game` (or the Python helper with `--build` alone). The wrapper prepares `output/jmafort-port/`, verifies the pristine source inventory under `xbox/third_party/castlevania-cod-pc/`, and uses SDK commit `91146ff6e2a218b19c1109dc665d06020472ab57` plus the donor's MIT SDK patch. Do not edit generated working-copy source as your maintained source; preserve any existing changes before preparing another version.
+
+For a different extracted game directory:
+
+```powershell
+python xbox/tools/jmafort_backend.py --assets "D:/MyGames/CoD-USA" --build --full-game --jobs 4
+```
+
+The main output directory is `output/jmafort-port/out/build/release/`. It contains `NobleArchimedes.exe` and `NobleArchimedesLauncher.exe`; the launcher offers display, game, language and texture-pack settings. Keep compiler/runtime support and locally staged assets in their generated layout. Primary CMake targets and locally generated game DLLs use `NobleArchimedes*` names so first-launch compilation and imports agree. Some internal window classes, logs and settings retain upstream compatibility names. Loading PCSX2-format HD packs is supported by the imported backend; packs and game files must be obtained separately. Use the upstream [HD texture instructions](xbox/third_party/castlevania-cod-pc/README.md#hd-textures) for pack layout.
+
+The root CMake default delegates to this Xbox build through the Python helper. It does not compile the experimental PS2 host unless explicitly configured with `-DNOBLE_EXPERIMENTAL_PS2=ON`.
+
+## European Xbox release
+
+Retain USA assets for the main build and add a separate extracted European Xbox copy:
+
+```powershell
+python xbox/tools/jmafort_backend.py --assets "D:/MyGames/CoD-USA" --eu-assets "D:/MyGames/CoD-EU" --build --full-game
+```
+
+The EU XBE SHA-1 expected by the helper is `b1910aaa4897cc9ca9627190289bf18d6a0943bd`. The additional application is `NobleArchimedesEU.exe`. The helper creates an `eu-play/` layout beside the main build so EU discovery uses the EU game files. EU source/configuration support is imported from upstream; **no EU game image was available to qualify EU compilation, gameplay or language selection locally**. Treat it as unqualified until tested with your own copy.
+
+## Xbox verification and distribution
+
+```powershell
+python xbox/tools/jmafort_backend.py --verify
+python -m unittest discover -s xbox/tests -p test_jmafort_backend.py
+python -m unittest discover -s xbox/tests -p test_imported_game_state.py
+```
+
+These checks verify source/preparation helpers and diagnostics; they do not certify a complete playthrough. The branded USA build passed 7/7 new-game/movement/menu steps, and its no-DLL first-run test passed 8/8 startup/gameplay checks. To run the main test groups and reproduce first-run compilation:
+
+```powershell
+cmake -S . -B output/noble-root-configure -G Ninja
+ctest --test-dir output/noble-root-configure --output-on-failure
+python xbox/tools/check_noble_first_run.py
+```
+
+The first-run check starts a separate test folder and saves, supplies the local game files, and intentionally omits the generated game DLL. It limits PATH to Windows components, but installed runtime DLLs are still available: this is not clean-Windows package qualification. Local reports are under ignored `output/jmafort-port/out/test/`. Build success, a launcher's presence and a high frame counter alone are not whole-game validation.
+
+Keep game files, locally generated C++/DLLs, logs containing game-derived data, screenshots/captures and saves out of source and release packages. A distributable host package must also include the applicable source/license/notice material and satisfy each dependency's terms; see [licensing](docs/LICENSING.md). Do not publish the whole local build directory.
+
+---
+
+# Experimental PS2 developer workflow
 
 Choose a configuration in [build variants](docs/BUILD_VARIANTS.md). The common setup and generation steps below apply to each public configuration. To work on a fork and submit changes, see [CONTRIBUTING.md](CONTRIBUTING.md).
 
@@ -57,7 +118,7 @@ CMake fetches window/UI libraries and Windows FFmpeg; network and upstream toolc
 - `ThirdParty/ffmpeg-prefix/src/ffmpeg_external/bin/{avcodec,avformat,avutil,swresample,swscale}.lib`;
 - optional GPU archive list `ps2xRuntime/pgs_link_inputs.txt`.
 
-A portable dependency/install manifest remains missing. The root CMake target is not the established generated-chunk entry point.
+A portable dependency/install manifest remains missing. The root CMake default builds the primary Xbox application. The experimental PS2 CMake path is selected with `-DNOBLE_EXPERIMENTAL_PS2=ON`; the manual generated-chunk workflow below remains the established PS2 build entry point.
 
 ## Generate guest C++ locally
 

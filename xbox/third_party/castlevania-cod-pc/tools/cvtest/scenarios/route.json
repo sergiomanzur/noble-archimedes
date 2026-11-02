@@ -1,0 +1,8 @@
+{
+  "name": "route",
+  "after": "newgame.json",
+  "note": "A recorded route played back (routes/courtyard-exit.json, recorded from the bot with --make-route): from the first courtyard down the corridor, a jump on the way, out of room 5.1 into 5.0 and a few steps there.",
+  "steps": [
+    {"route": "courtyard-exit", "shot": "route-end", "expect": ["map == 5", "room == 0", "abs(player.pos[2] + 8448) < 200"]}
+  ]
+}

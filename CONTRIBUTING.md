@@ -1,8 +1,8 @@
 # Contributing to Noble Archimedes
 
-**Please fork, experiment and send pull requests.** We want a reproducible, correct native port that reaches 58–60 actual gameplay updates per second. Compiler/runtime knowledge helps, but documentation improvements, clean-build reports and small synthetic regression tests are valuable contributions too.
+**Please fork, experiment and send pull requests.** The primary target is the Xbox D3D12 BYOG port based on jmafort/CastlevaniaCOD-PC; the separate PS2 host remains experimental. We want reproducible builds, correct behavior and sustained gameplay performance. Compiler/runtime knowledge helps, but documentation improvements, clean-build reports and small synthetic regression tests are valuable contributions too.
 
-Read the [status](docs/PROJECT_STATUS.md), [common build guide](BUILDING.md) and [configuration recipes](docs/BUILD_VARIANTS.md). The public snapshot does not yet reproduce the private optimized VU module or full engine-seam experiments. That gap is an opportunity to help, not an expectation that contributors obtain private game-derived code.
+Read the [build guide](BUILDING.md), [license scope](docs/LICENSING.md) and [upstream import record](docs/CASTLEVANIA_COD_PC_IMPORT.md). The Xbox donor snapshot must remain pristine; maintained integration and branding changes belong in project helpers/overlays and their verification checks. For experimental PS2 work, see [research status](docs/PROJECT_STATUS.md) and [configuration recipes](docs/BUILD_VARIANTS.md). Private optimized VU/game-derived modules are not contribution prerequisites.
 
 ## Fork and start a focused change
 
@@ -13,13 +13,14 @@ git clone --recurse-submodules https://github.com/YOUR_GITHUB_NAME/noble-archime
 cd noble-archimedes
 git remote add upstream https://github.com/sergiomanzur/noble-archimedes.git
 git switch -c codex/describe-your-change
-git -C tools/PS2Recomp apply --check ../../patches/ps2recomp-progress.patch
-git -C tools/PS2Recomp apply ../../patches/ps2recomp-progress.patch
 ```
 
-Choose a build profile and follow its common input/generation steps. A docs/helper-only change does not need game assets. Keep changes focused enough to review and explain the concrete problem they solve.
+Follow the primary Xbox instructions in BUILDING.md. Only PS2 contributors need to apply the PS2Recomp patch, as described there. A docs/helper-only change does not need game assets. Keep changes focused enough to review and explain the concrete problem they solve.
 
 Useful starting points:
+
+- Improve the Xbox launcher, original branding, setup diagnostics and reproducible builds while retaining donor attribution.
+- Validate EU input, HD texture packs, save/load, audio, movies and gameplay across more rooms; report exactly what was exercised.
 
 - Make clean Windows setup reproducible: configurable toolchain paths, dependency manifests and clearer missing-input diagnostics.
 - Teach the manual helpers about build profiles and the hybrid host definition, with tests for the resulting build/link inputs.
@@ -87,9 +88,9 @@ If you cannot run a check, say so. A precise limitation is more useful than an u
 
 ## Keep game material and local artifacts out of contributions
 
-Submit code you have the right to contribute. Preserve upstream notices and applicable licenses; this repository currently assigns no blanket new license to every project-authored file. See [third-party notices](THIRD_PARTY_NOTICES.md) and [publication scope](docs/PUBLICATION.md).
+Submit code you have the right to contribute. Original Noble Archimedes branding and synthetic audio may be contributed in `assets/noble/` under CC0; identify how they were made and include no game artwork or soundtrack. Preserve upstream notices and applicable licenses. Original contributions use the scoped licenses in [LICENSE](LICENSE); derivative contributions retain compatible upstream terms. The GPLv2 Xbox application and GPLv3 PS2 application remain separate programs. Do not copy incompatible implementation between them. Identify third-party code and its provenance in your PR. See [third-party notices](THIRD_PARTY_NOTICES.md) and [publication scope](docs/PUBLICATION.md).
 
-Do not attach or commit ISO/ELF/BIOS/IRX files, assets, translated game implementations or microcode, generated chunks, RAM/VRAM/VU/GIF captures, oracle data, saves, compiled binaries or dependency archives. Share aggregate measurements, generic fixtures you authored and source tools that regenerate required inputs locally. Check staged files, not just `.gitignore`. Keep any game-specific comparison evidence local.
+Do not attach or commit ISO/XBE/ELF/BIOS/IRX files, game assets, translated game implementations or microcode, generated chunks, RAM/VRAM/VU/GIF captures, oracle data, saves, compiled binaries or dependency archives. Share aggregate measurements, generic fixtures you authored and source tools that regenerate required inputs locally. Check staged files, not just `.gitignore`. Keep any game-specific comparison evidence local.
 
 `PUBLICATION_MANIFEST.json` tracks ordinary published files. Refresh hashes for edited files and add intentional new source/docs files; do not add game/build outputs. If you need help refreshing it, mention that in the PR. Maintainers also verify the submodule pin and publication scope.
 

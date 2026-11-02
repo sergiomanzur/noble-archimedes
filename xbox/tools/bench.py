@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import argparse
 import ctypes
+import json
 from ctypes import wintypes as w
 import os
 from pathlib import Path
@@ -259,16 +260,37 @@ def find_window(pid: int):
     return found[0] if found else None
 
 
+def latest_presented_flip() -> int:
+    path = ROOT / "xbox_stderr.log"
+    try:
+        data = path.read_text(errors="ignore")[-131072:]
+    except OSError:
+        return 0
+    found = re.findall(r"\[BENCH\] ms=\d+ flips=(\d+)", data)
+    return int(found[-1]) if found else 0
+
+
+def capture_pairs(capture_flips: str, scenes) -> list[tuple[str, int]]:
+    """Pair scene names with the exact presented flips the runner will capture."""
+    flips = [int(x) for x in capture_flips.replace(";", ",").split(",")
+             if x.strip()]
+    return [(scene[0], flip) for scene, flip in zip(scenes, flips)]
+
+
 def run_one(exe: Path, out: Path, pad_text: str, duration: int,
             backend: str, update_baseline: bool, no_unique: bool = False,
             no_gpu_stats: bool = False, no_p8_cache: bool = False,
             capture_flips: str = "", pad_frames: bool = False,
-            gpu_present: bool = False, d3d8gl: bool = False) -> list[Path]:
+            gpu_present: bool = False, d3d8gl: bool = False,
+            required_flip: int = 0, wall_timeout: int = 0,
+            frame_stats: bool = False) -> list[Path]:
     if backend not in BACKENDS:
         raise ValueError(f"unknown backend: {backend}")
     if gpu_present and backend != "d3d11":
         raise ValueError("gpu_present requires the d3d11 backend")
     out.mkdir(parents=True, exist_ok=True)
+    scenes = MAIN_SCENES if pad_text else MOVIE_SCENES
+    exact_captures = capture_pairs(capture_flips, scenes)
     (out / "pad_script.txt").write_text(pad_text, encoding="ascii")
     for f in ("xbox_stdout.log", "xbox_stderr.log", "xbox_kernel.log"):
         src = ROOT / f
@@ -280,17 +302,26 @@ def run_one(exe: Path, out: Path, pad_text: str, duration: int,
     env.update(
         RECOMP_PAD_SCRIPT="@" + str(out / "pad_script.txt"),
         RECOMP_FB_WINDOW="1",
-        RECOMP_FB_DUMP=str(out / "frame.bmp"),
-        RECOMP_FB_WINDOW_DUMP_EVERY="30",
         RECOMP_PACE_STATS="1",
         RECOMP_BENCH_STATS="1",
     )
+    if not exact_captures:
+        # Legacy path for callers that did not request exact flips.  Benchmark
+        # runs use the exact presented-frame captures below and must not write
+        # a 921 KiB window BMP every 30 frames.
+        env["RECOMP_FB_DUMP"] = str(out / "frame.bmp")
+        env["RECOMP_FB_WINDOW_DUMP_EVERY"] = "30"
     if not no_unique:
         env["RECOMP_BENCH_UNIQUE"] = "1"
     if not no_gpu_stats:
         env["RECOMP_GPU_STATS"] = "1"
     if no_p8_cache:
         env["RECOMP_NO_P8_CACHE"] = "1"
+    if frame_stats:
+        env["RECOMP_FRAME_STATS"] = "1"
+        env["RECOMP_FRAME_STATS_FILE"] = str(out / "framestats.csv")
+        env["RECOMP_FRAME_STATS_START"] = "0"
+        env["RECOMP_FRAME_STATS_END"] = str(required_flip)
     if capture_flips:
         env["RECOMP_CAPTURE_FLIPS"] = capture_flips
         env["RECOMP_CAPTURE_DIR"] = str(out)
@@ -314,14 +345,24 @@ def run_one(exe: Path, out: Path, pad_text: str, duration: int,
     start = time.monotonic()
     # Capture at each scene midpoint; the window dump is refreshed every 30
     # presented frames, so a copy here is the frame the scene was measured on.
-    scenes = MAIN_SCENES if pad_text else MOVIE_SCENES
     captures = []
-    for name, a, b in scenes:
-        captures.append((name, start + (a + b) / 2000.0))
-    captures.sort(key=lambda x: x[1])
+    if not exact_captures:
+        for name, a, b in scenes:
+            captures.append((name, start + (a + b) / 2000.0))
+        captures.sort(key=lambda x: x[1])
     ci = 0
+    timed_out = False
     try:
-        while time.monotonic() - start < duration and p.poll() is None:
+        while p.poll() is None:
+            elapsed = time.monotonic() - start
+            if required_flip:
+                if latest_presented_flip() >= required_flip:
+                    break
+                if wall_timeout and elapsed >= wall_timeout:
+                    timed_out = True
+                    break
+            elif elapsed >= duration:
+                break
             now = time.monotonic()
             while ci < len(captures) and now >= captures[ci][1]:
                 frame = out / "frame.bmp"
@@ -342,6 +383,22 @@ def run_one(exe: Path, out: Path, pad_text: str, duration: int,
             src = ROOT / f
             if src.exists():
                 shutil.copy2(src, out / f)
+        for name, flip in exact_captures:
+            src = out / f"present_{flip}.bmp"
+            if src.exists():
+                dst = out / f"capture_{name}.bmp"
+                shutil.copy2(src, dst)
+                shots.append(dst)
+        max_flip = latest_presented_flip()
+        complete = (max_flip >= required_flip) if required_flip else (not timed_out)
+        (out / "run_status.json").write_text(
+            json.dumps({
+                "required_flip": required_flip,
+                "max_flip": max_flip,
+                "complete": complete,
+                "timed_out": timed_out,
+                "wall_seconds": round(time.monotonic() - start, 3),
+            }, indent=2), encoding="ascii")
     return shots
 
 

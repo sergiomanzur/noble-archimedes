@@ -27,6 +27,13 @@ set(XBOXRECOMP_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../tools/xboxrecomp" CACHE PATH
 
 # Add xboxrecomp as a subdirectory -- this builds all 6 runtime libraries
 # and provides the 'xboxrecomp' umbrella target to link against.
+find_package(Python3 REQUIRED COMPONENTS Interpreter)
+execute_process(COMMAND ${Python3_EXECUTABLE}
+    ${CMAKE_CURRENT_SOURCE_DIR}/tools/prepare_input_runtime.py ${XBOXRECOMP_DIR}
+    RESULT_VARIABLE NOBLE_INPUT_PATCH_RESULT)
+if(NOT NOBLE_INPUT_PATCH_RESULT EQUAL 0)
+    message(FATAL_ERROR "Cannot prepare the tracked input provider runtime patch")
+endif()
 add_subdirectory(${XBOXRECOMP_DIR} ${CMAKE_BINARY_DIR}/xboxrecomp)
 
 # ── Recompiled game executable ──────────────────────────────────
@@ -52,7 +59,13 @@ add_custom_target(prepare_xbox_generated
 set(GAME_SOURCES
     src/main.c
     src/recomp_manual.c
+    src/game_stack_trace.c
+    src/guest_profile.c
+    src/pair_timer.c
+    src/render_capture.c
+    src/frame_timeline.c
     src/frame_pacing.c
+    src/wide_guest_projection.c
     src/gpu_sync.c
     src/d3d8_hle.c
     src/xmv_yuv.c
@@ -73,6 +86,36 @@ add_executable(${PROJECT_NAME} WIN32
     ${GAME_SOURCES}
     ${RECOMP_GEN_SOURCES}
 )
+
+# Host input belongs to the executable so controller/keyboard support is
+# available with software presentation as well as D3D8GL.
+set(NOBLE_SDL3_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../output/sdl3/SDL3-3.4.18"
+    CACHE PATH "SDL3 Windows development package")
+if(NOT EXISTS "${NOBLE_SDL3_ROOT}/include/SDL3/SDL.h")
+    message(FATAL_ERROR "SDL3 development package missing; set NOBLE_SDL3_ROOT")
+endif()
+add_library(noble_controls STATIC
+    src/controls/input_core.c
+    src/controls/input_config.c
+    src/controls/input_host.c
+    src/controls/input_win32.c
+    src/controls/camera_input.c
+    src/controls/controls_panel.c)
+target_include_directories(noble_controls PUBLIC src/controls
+    "${NOBLE_SDL3_ROOT}/include" "${XBOXRECOMP_DIR}/src")
+target_compile_definitions(noble_controls PRIVATE _CRT_SECURE_NO_WARNINGS)
+target_link_libraries(noble_controls PUBLIC
+    "${NOBLE_SDL3_ROOT}/lib/x64/SDL3.lib" user32 gdi32 comctl32 shell32)
+target_link_libraries(${PROJECT_NAME} PRIVATE noble_controls)
+add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${NOBLE_SDL3_ROOT}/lib/x64/SDL3.dll" "$<TARGET_FILE_DIR:${PROJECT_NAME}>")
+add_executable(NobleControls WIN32 src/controls/controls_app.c)
+target_link_libraries(NobleControls PRIVATE noble_controls xboxrecomp)
+target_compile_definitions(NobleControls PRIVATE _CRT_SECURE_NO_WARNINGS)
+add_custom_command(TARGET NobleControls POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${NOBLE_SDL3_ROOT}/lib/x64/SDL3.dll" "$<TARGET_FILE_DIR:NobleControls>")
 target_compile_definitions(${PROJECT_NAME} PRIVATE NOBLE_HAVE_D3D11 NOBLE_HAVE_D3D12)
 # The software rasteriser is the hot path. AVX2 is available on the
 # development host and the release target.

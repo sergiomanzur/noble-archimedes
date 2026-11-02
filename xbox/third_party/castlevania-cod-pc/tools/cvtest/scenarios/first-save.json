@@ -1,0 +1,9 @@
+{
+  "name": "first-save",
+  "after": "newgame.json",
+  "note": "A recording of play played back (routes/first-save.json, cvtest --record): from the first courtyard into 5.2 and its first enemy, the hint box, the item it drops, west into the save room 5.27 and a save there, back into 5.2, the pause menu and the map screen.",
+  "steps": [
+    {"route": "first-save", "shot": "route-end",
+     "expect": ["map == 5", "room == 2", "step.saved", "player.exp > 0", "not menu", "not modal", "not camera.special"]}
+  ]
+}

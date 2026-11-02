@@ -44,6 +44,40 @@
 #include "kernel/nv2a_backend.h"
 #include "kernel/nv2a_gpu.h"
 #include "d3d8_hle.h"
+#include "controls/input_host.h"
+#include "controls/controls_panel.h"
+#include "controls/input_win32.h"
+#include "controls/camera_input.h"
+#include <SDL3/SDL.h>
+
+static void controls_shutdown(void)
+{
+    controls_panel_shutdown();
+    noble_win32_input_shutdown();
+    noble_camera_report();
+    noble_input_shutdown();
+}
+
+static void controls_ui_pump(void)
+{
+    noble_win32_input_pump();
+    controls_panel_pump();
+}
+
+static void controls_gamepad_axes(NiOutput *output)
+{
+    /* This title's 0x41D60 maps raw radial magnitude with these constants.
+     * Encode conditioned host axes through its inverse so the configured host
+     * deadzone is not applied a second time by the guest. */
+    noble_input_inverse_guest_axes(output, 1.0f / 79.0f, -16.0f / 79.0f);
+}
+
+static void controls_dispatch(const void *opaque)
+{
+    const SDL_Event *event = (const SDL_Event *)opaque;
+    controls_panel_event(opaque);
+    if (event->type == SDL_EVENT_QUIT) exit(0);
+}
 
 extern void recomp_present_frame(void);
 extern const Nv2aGpuBackend *nv2a_gpu_d3d11_backend(void);
@@ -350,12 +384,28 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
     setvbuf(stdout, NULL, _IONBF, 0);
     setvbuf(stderr, NULL, _IONBF, 0);
 
+    /* Host-only generated-code diagnostics are opt-in. */
+    {
+        extern void recomp_game_stack_trace_init(void);
+        extern void recomp_timeline_init(void);
+        extern void recomp_guest_profile_init(void);
+        extern void recomp_count_init(void);
+        extern void recomp_pair_time_init(void);
+        extern void recomp_render_capture_init(void);
+        recomp_game_stack_trace_init();
+        recomp_timeline_init();
+        recomp_guest_profile_init();
+        recomp_count_init();
+        recomp_pair_time_init();
+        recomp_render_capture_init();
+    }
+
     /* Enable 1ms multimedia timer resolution for smooth 60/30 FPS pacing */
     timeBeginPeriod(1);
 
     if (!getenv("RECOMP_PB_EXEC")) _putenv("RECOMP_PB_EXEC=1");
     if (!getenv("RECOMP_PB_WALK")) _putenv("RECOMP_PB_WALK=dma");
-    if (!getenv("RECOMP_FB_WINDOW")) _putenv("RECOMP_FB_WINDOW=1");
+    if (!getenv("RECOMP_FB_WINDOW") && !getenv("RECOMP_WIDE_PROBE")) _putenv("RECOMP_FB_WINDOW=1");
     if (!getenv("RECOMP_USB")) _putenv("RECOMP_USB=1");
     if (!getenv("RECOMP_KEYBOARD")) _putenv("RECOMP_KEYBOARD=1");
     if (!getenv("RECOMP_VBLANK")) _putenv("RECOMP_VBLANK=1");
@@ -420,6 +470,16 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
         extern void xbox_OhciInit(void);
         extern void xbox_InputInit(void);
         xbox_OhciInit();
+        if (noble_input_init()) {
+            noble_input_set_guest_axis_adapter(controls_gamepad_axes);
+            noble_win32_input_init();
+            noble_camera_set_diagnostics(getenv("RECOMP_CAMERA_STATS") != NULL);
+            noble_input_set_open_controls(controls_panel_open);
+            noble_input_set_ui_pump(controls_ui_pump);
+            noble_input_set_dispatch(controls_dispatch);
+            noble_d3d8_set_host_input_pump(noble_input_pump);
+            atexit(controls_shutdown);
+        }
         xbox_InputInit();
     }
 

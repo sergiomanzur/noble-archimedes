@@ -28,6 +28,20 @@ memory_watch.c detects that by write-protecting the pages.
 #endif
 #include <stdlib.h>
 #include <string.h>
+#include <stdarg.h>
+
+static unsigned long long tex_lookups, tex_recent_hits, tex_recent_misses;
+static unsigned long texture_frame;
+static unsigned texture_trace_count;
+static unsigned long long tex_content_checks, tex_content_bytes, tex_changes, tex_uploads;
+static unsigned long long tex_palettized_lookups, tex_palette_selections;
+static unsigned long long tex_palette_selection_changes, tex_palette_hashes;
+static unsigned long long tex_palette_bytes, tex_palette_content_changes;
+static unsigned long long tex_palette_variant_mismatches, tex_invalidations;
+static struct { const D3DCOLOR *pointer; unsigned long hash; } palette_seen[64];
+static unsigned palette_seen_count;
+static struct { DWORD data; unsigned long hash; } palette_selected[64];
+static unsigned palette_selected_count;
 
 /* Halo PC's Custom Edition channel-order enum is not part of this title. */
 #define NUMBER_OF_CUSTOM_EDITION_CHANNEL_ORDERS 3
@@ -370,7 +384,7 @@ static unsigned long convert_texel(unsigned char kind, const unsigned char *sour
 
 /* one level (or 3D slice set) of an uncompressed texture into BGRA; FALSE
 when out of memory */
-static BOOL decode_level(const struct xgpu_texture_description *description, unsigned long level,
+static BOOL decode_level_generic(const struct xgpu_texture_description *description, unsigned long level,
 	const unsigned char *source, const D3DCOLOR *palette, unsigned long *destination)
 {
 	struct format_information information = format_information(description->format);
@@ -426,6 +440,192 @@ static BOOL decode_level(const struct xgpu_texture_description *description, uns
 		free(x_offsets);
 	}
 	return TRUE;
+}
+
+/* P8 is most of this title's textures and most of its re-uploads (a palette
+that changes uploads the indices again): converting it through
+convert_texel would dispatch on the format and test for no palette at every
+texel. The texels this writes are the ones that would (argb(255, v, v, v) for
+no palette): palette lookups, or the general conversion, one per texel */
+static BOOL decode_level_p8(const struct xgpu_texture_description *description, unsigned long level,
+	const unsigned char *source, const D3DCOLOR *palette, unsigned long *destination)
+{
+	unsigned long width = level_dimension(description->width, level);
+	unsigned long height = level_dimension(description->height, level);
+	unsigned long depth = level_dimension(description->depth, level);
+	unsigned long x, y, z;
+
+	if (description->linear)
+	{
+		/* (P8 is a byte a texel: the texels a row's pitch holds) */
+		unsigned long texels = description->pitch < width ? description->pitch : width;
+
+		for (y = 0; y < height; y++)
+		{
+			const unsigned char *row = source + y * description->pitch;
+			unsigned long *out = destination + y * width;
+
+			for (x = 0; x < texels; x++)
+				out[x] = palette ? palette[row[x]] : argb(255, row[x], row[x], row[x]);
+			for (; x < width; x++)
+				out[x] = 0;
+		}
+		return TRUE;
+	}
+	{
+		struct swizzle_masks masks = swizzle_masks(width, height, depth);
+		unsigned long *x_offsets = malloc(width * sizeof(unsigned long));
+
+		if (!x_offsets)
+			return FALSE;
+		for (x = 0; x < width; x++)
+			x_offsets[x] = spread(masks.x, x);
+		for (z = 0; z < depth; z++)
+		{
+			unsigned long z_offset = spread(masks.z, z);
+
+			for (y = 0; y < height; y++)
+			{
+				unsigned long y_offset = spread(masks.y, y) | z_offset;
+				unsigned long *out = destination + (z * height + y) * width;
+
+				for (x = 0; x < width; x++)
+				{
+					unsigned char texel = source[x_offsets[x] | y_offset];
+
+					out[x] = palette ? palette[texel] : argb(255, texel, texel, texel);
+				}
+			}
+		}
+		free(x_offsets);
+	}
+	return TRUE;
+}
+
+static BOOL decode_level(const struct xgpu_texture_description *description, unsigned long level,
+	const unsigned char *source, const D3DCOLOR *palette, unsigned long *destination)
+{
+	if (format_information(description->format).kind == _texel_p8)
+		return decode_level_p8(description, level, source, palette, destination);
+	return decode_level_generic(description, level, source, palette, destination);
+}
+
+/* the P8 selftest's palettes, every entry different between patterns (and in
+place, as the game rewrites a palette it has handed to the device) */
+static void decode_p8_test_palette(D3DCOLOR *palette, unsigned long pattern)
+{
+	unsigned long index;
+
+	for (index = 0; index < 256; index++)
+	{
+		switch (pattern)
+		{
+		case 0: palette[index] = 0xff000000u | (index << 16) | (255u - index); break;
+		case 1: palette[index] = (index << 24) | ((255u - index) << 8) | 0x5au; break;
+		default: palette[index] = (index & 1) ? 0xffffffffu : 0x00000000u; break;
+		}
+	}
+}
+
+/* the fast and general conversions of one level, compared byte for byte */
+static BOOL decode_p8_test_pair(const struct xgpu_texture_description *description, unsigned long level,
+	const unsigned char *source, const D3DCOLOR *palette, unsigned long *fast, unsigned long *general,
+	unsigned long texels)
+{
+	BOOL fast_ok = decode_level_p8(description, level, source, palette, fast);
+	BOOL general_ok = decode_level_generic(description, level, source, palette, general);
+
+	return fast_ok && general_ok &&
+		!memcmp(fast, general, (size_t)texels * sizeof(fast[0]));
+}
+
+/* Host regression (d3d8gl_abi_test): decode_level_p8 must write exactly what
+the general conversion writes. Linear rows with pitch narrower than, equal to
+and wider than the width, and pitch 0; swizzled 2D and 3D levels; mip levels;
+no palette; and palettes rewritten in place between decodes. */
+int noble_d3d8_decode_p8_selftest(void)
+{
+	static const struct
+	{
+		unsigned long width, height, depth, pitch, level;
+		BOOL linear, palette;
+	} cases[] =
+	{
+		{ 16, 8, 1, 16, 0, TRUE, TRUE },   /* linear, pitch == width */
+		{ 16, 8, 1, 32, 0, TRUE, TRUE },   /* pitch > width */
+		{ 16, 8, 1, 12, 0, TRUE, TRUE },   /* pitch < width: the rest zero */
+		{ 16, 8, 1, 0, 0, TRUE, TRUE },    /* pitch 0: every texel zero */
+		{ 16, 8, 1, 16, 0, TRUE, FALSE },  /* no palette: luminance */
+		{ 16, 8, 1, 0, 0, FALSE, TRUE },   /* swizzled 2D */
+		{ 8, 8, 1, 0, 0, FALSE, FALSE },
+		{ 32, 16, 1, 0, 1, FALSE, TRUE },  /* mip 1: 16x8 */
+		{ 32, 16, 1, 0, 2, FALSE, TRUE },  /* mip 2: 8x4 */
+		{ 8, 8, 2, 0, 0, FALSE, TRUE },    /* swizzled 3D */
+		{ 8, 8, 4, 0, 0, FALSE, FALSE },
+		{ 8, 8, 4, 0, 2, FALSE, TRUE },   /* 3D mip 2: 2x2x1 */
+		{ 16, 8, 2, 0, 1, FALSE, TRUE },   /* 3D mip 1: 8x4x1 */
+		{ 4, 4, 4, 0, 0, FALSE, TRUE },
+	};
+	D3DCOLOR palette[256];
+	unsigned char source[4096];
+	unsigned long fast[4096], general[4096], repeat[4096];
+	unsigned long index, case_index;
+
+	for (index = 0; index < sizeof(source); index++)
+		source[index] = (unsigned char)(index * 37u + (index >> 3));
+	for (case_index = 0; case_index < sizeof(cases) / sizeof(cases[0]); case_index++)
+	{
+		struct xgpu_texture_description description;
+		unsigned long level = cases[case_index].level;
+		unsigned long width = cases[case_index].width >> level;
+		unsigned long height = cases[case_index].height >> level;
+		unsigned long depth = cases[case_index].depth >> level;
+		unsigned long texels = width * height * depth;
+		/* (pitch 0 reads no texel: its palette cannot change the output) */
+		BOOL reads = cases[case_index].linear ?
+			cases[case_index].pitch > 0 && width > 0 : texels > 0;
+
+		memset(&description, 0, sizeof(description));
+		description.format = 0x0b; /* P8 */
+		description.width = cases[case_index].width;
+		description.height = cases[case_index].height;
+		description.depth = cases[case_index].depth;
+		description.levels = 1 + level;
+		description.linear = cases[case_index].linear;
+		description.pitch = cases[case_index].pitch;
+		decode_p8_test_palette(palette, 0);
+		if (!decode_p8_test_pair(&description, level, source,
+			cases[case_index].palette ? palette : NULL, fast, general, texels))
+			return 0;
+		memcpy(repeat, fast, (size_t)texels * sizeof(repeat[0]));
+		if (cases[case_index].palette)
+		{
+			/* a palette rewritten in place must change the texels, and a
+			second pattern likewise; putting the first back must put the
+			first texels back */
+			decode_p8_test_palette(palette, 1);
+			if (!decode_p8_test_pair(&description, level, source, palette, fast, general, texels) ||
+				(reads && !memcmp(fast, repeat, (size_t)texels * sizeof(fast[0]))))
+				return 0;
+			decode_p8_test_palette(palette, 2);
+			if (!decode_p8_test_pair(&description, level, source, palette, fast, general, texels) ||
+				(reads && !memcmp(fast, repeat, (size_t)texels * sizeof(fast[0]))))
+				return 0;
+			decode_p8_test_palette(palette, 0);
+			if (!decode_p8_test_pair(&description, level, source, palette, fast, general, texels) ||
+				memcmp(fast, repeat, (size_t)texels * sizeof(fast[0])))
+				return 0;
+		}
+		else
+		{
+			/* no palette: its bytes are irrelevant, and must stay so */
+			decode_p8_test_palette(palette, 1);
+			if (!decode_p8_test_pair(&description, level, source, NULL, fast, general, texels) ||
+				memcmp(fast, repeat, (size_t)texels * sizeof(fast[0])))
+				return 0;
+		}
+	}
+	return 1;
 }
 
 #ifdef HALO_GLES
@@ -730,7 +930,9 @@ static void upload(GLuint texture, GLenum target, const struct xgpu_texture_desc
 		return;
 	}
 	glBindTexture(target, texture);
-	xgpu_gl_state_invalidate();
+	/* (the upload bound this target on the current unit: the rest of the GL
+	state is as the shadow has it, and is not sent again at the next draw) */
+	xgpu_gl_texture_binding_invalidated(target);
 	/* the channel of the texels each channel is sampled from, set on every
 	upload: a texture object can be reused for other texels (WebGL 2 has no
 	texture swizzle: the converted texels' channels are put in order before
@@ -889,7 +1091,7 @@ static struct
 	unsigned long drop_serial;
 } recent_textures[RECENT_TEXTURE_COUNT];
 static unsigned long texture_drop_serial = 1;
-static unsigned long texture_frame = 0;
+static unsigned long texture_frame;
 /* the frame of each of the last sweeps, a sweep apart, and when the next
 is due */
 static unsigned long texture_sweep_frames[TEXTURE_SWEEP_COUNT];
@@ -1006,15 +1208,100 @@ static GLuint texture_entry_result(struct texture_entry *entry, GLenum *target,
 	return entry->texture;
 }
 
+__declspec(dllexport) unsigned long noble_d3d8_texture_frame(void)
+{
+    return texture_frame;
+}
+
+__declspec(dllexport) void noble_d3d8_texture_stats(
+    unsigned long long *lookups, unsigned long long *recent_hits,
+    unsigned long long *recent_misses, unsigned long long *content_checks,
+    unsigned long long *content_bytes, unsigned long long *changes,
+    unsigned long long *uploads, unsigned long long *palettized_lookups,
+    unsigned long long *palette_selections, unsigned long long *palette_selection_changes,
+    unsigned long long *palette_hashes, unsigned long long *palette_bytes,
+    unsigned long long *palette_content_changes, unsigned long long *palette_variant_mismatches,
+    unsigned long long *invalidations)
+{
+    if (lookups) *lookups = tex_lookups;
+    if (recent_hits) *recent_hits = tex_recent_hits;
+    if (recent_misses) *recent_misses = tex_recent_misses;
+    if (content_checks) *content_checks = tex_content_checks;
+    if (content_bytes) *content_bytes = tex_content_bytes;
+    if (changes) *changes = tex_changes;
+    if (uploads) *uploads = tex_uploads;
+    if (palettized_lookups) *palettized_lookups = tex_palettized_lookups;
+    if (palette_selections) *palette_selections = tex_palette_selections;
+    if (palette_selection_changes) *palette_selection_changes = tex_palette_selection_changes;
+    if (palette_hashes) *palette_hashes = tex_palette_hashes;
+    if (palette_bytes) *palette_bytes = tex_palette_bytes;
+    if (palette_content_changes) *palette_content_changes = tex_palette_content_changes;
+    if (palette_variant_mismatches) *palette_variant_mismatches = tex_palette_variant_mismatches;
+    if (invalidations) *invalidations = tex_invalidations;
+}
+
+static int texture_trace(void)
+{
+    static int enabled = -1;
+    if (enabled < 0) enabled = getenv("RECOMP_TEXTURE_TRACE") != NULL;
+    return enabled;
+}
+
+static void texture_trace_log(const char *format, ...)
+{
+    static FILE *file;
+    va_list args;
+    if (!texture_trace())
+        return;
+    if (!file)
+        file = fopen("output\\texture_trace.txt", "a");
+    if (!file)
+        return;
+    va_start(args, format);
+    vfprintf(file, format, args);
+    va_end(args);
+    fflush(file);
+}
+
 GLuint xgpu_texture_get(const DWORD *resource, const D3DCOLOR *palette, GLenum *target,
 	struct xgpu_texture_description *description)
 {
+    tex_lookups++;
 	DWORD data = resource[1], format_word = resource[3], size_word = resource[4];
 	struct texture_entry **bucket = &texture_buckets[bucket_index(data, format_word, size_word)];
 	struct texture_entry *entry;
 	unsigned long generation;
 	BOOL palettized = ((format_word & D3DFORMAT_FORMAT_MASK) >> D3DFORMAT_FORMAT_SHIFT) == 0x0b;
 	unsigned long hash = palettized ? palette_hash(palette) : 0;
+    if (palettized) {
+        unsigned pi;
+        tex_palettized_lookups++;
+        tex_palette_selections++;
+        tex_palette_hashes++;
+        tex_palette_bytes += 256u * 4u;
+        for (pi = 0; pi < palette_seen_count; pi++)
+            if (palette_seen[pi].pointer == palette)
+                break;
+        if (pi == palette_seen_count && pi < 64) {
+            palette_seen[pi].pointer = palette;
+            palette_seen[pi].hash = hash;
+            palette_seen_count++;
+        } else if (pi < palette_seen_count && palette_seen[pi].hash != hash) {
+            palette_seen[pi].hash = hash;
+            tex_palette_content_changes++;
+        }
+        for (pi = 0; pi < palette_selected_count; pi++)
+            if (palette_selected[pi].data == data)
+                break;
+        if (pi == palette_selected_count && pi < 64) {
+            palette_selected[pi].data = data;
+            palette_selected[pi].hash = hash;
+            palette_selected_count++;
+        } else if (pi < palette_selected_count && palette_selected[pi].hash != hash) {
+            palette_selected[pi].hash = hash;
+            tex_palette_selection_changes++;
+        }
+    }
 
 	struct texture_entry *oldest_variant = NULL;
 	unsigned long variant_count = 0;
@@ -1032,11 +1319,13 @@ GLuint xgpu_texture_get(const DWORD *resource, const D3DCOLOR *palette, GLenum *
 		entry = recent_textures[recent].entry;
 		if (recent_textures[recent].watch_serial == watch_serial)
 		{
+			tex_recent_hits++;
 			entry->last_used_frame = texture_frame;
 			return texture_entry_result(entry, target, description);
 		}
 	}
 
+	tex_recent_misses++;
 	if (!entry)
 	{
 		for (entry = *bucket; entry; entry = entry->next)
@@ -1045,6 +1334,7 @@ GLuint xgpu_texture_get(const DWORD *resource, const D3DCOLOR *palette, GLenum *
 			{
 				if (entry->palette_hash == hash)
 					break;
+				tex_palette_variant_mismatches++;
 				variant_count++;
 				if (!oldest_variant || entry->last_used_frame < oldest_variant->last_used_frame)
 					oldest_variant = entry;
@@ -1091,6 +1381,12 @@ GLuint xgpu_texture_get(const DWORD *resource, const D3DCOLOR *palette, GLenum *
 		*bucket = entry;
 	}
 
+	if (texture_trace() && palettized && texture_trace_count++ < 3000)
+		texture_trace_log("[TEXTRACE] data=%08lx fmt=%08lx size=%08lx %lux%lux%lu levels=%lu pal=%p hash=%08lx entry=%p entry_pal=%08lx gen=%lu serial=%lu\n",
+			(unsigned long)data, (unsigned long)format_word, (unsigned long)size_word,
+			entry->description.width, entry->description.height, entry->description.depth,
+			entry->description.levels, (void *)palette, hash, (void *)entry,
+			entry->palette_hash, entry->generation, watch_serial);
 	if (no_cache < 0)
 		no_cache = config_boolean("debug.texture_no_cache");
 	/* (its pages' newest generation, found again only once a watched page
@@ -1100,13 +1396,17 @@ GLuint xgpu_texture_get(const DWORD *resource, const D3DCOLOR *palette, GLenum *
 		generation = entry->watched_generation;
 	else
 	{
+		tex_content_checks++;
+		tex_content_bytes += entry->size;
 		generation = memory_watch_generation(entry->address, entry->size);
 		entry->watched_serial = watch_serial;
 		entry->watched_generation = generation;
 	}
 	if (!entry->generation || generation > entry->generation || no_cache)
 	{
+		tex_invalidations++;
 		/* protect first, so a write racing with the upload is noticed */
+		tex_changes++;
 		memory_watch_protect(entry->address, entry->size);
 		entry->generation = memory_watch_generation(entry->address, entry->size);
 		if (!entry->generation)
@@ -1148,6 +1448,10 @@ GLuint xgpu_texture_get(const DWORD *resource, const D3DCOLOR *palette, GLenum *
 					entry->description.height, entry->size, entry->generation,
 					ones * 100 / entry->size, zeros * 100 / entry->size);
 			}
+			tex_uploads++;
+			if (texture_trace() && palettized && texture_trace_count < 3000)
+				texture_trace_log("[TEXTRACE] upload data=%08lx palette=%08lx entry=%p\n",
+					(unsigned long)data, hash, (void *)entry);
 			upload(entry->texture, entry->target, &entry->description, (const unsigned char *)entry->address, palette,
 				custom_edition_texels_order(entry->address));
 			xgpu_statistics_texture_upload(entry->size);
@@ -1227,4 +1531,89 @@ void xgpu_texture_cache_begin_frame(void)
 			}
 		}
 	}
+}
+
+
+__declspec(dllexport) unsigned long noble_d3d8_texture_bytes(const uint32_t *resource)
+{
+    struct xgpu_texture_description description;
+    unsigned long face, size;
+    if (!resource)
+        return 0;
+    xgpu_texture_describe(resource[3], resource[4], &description);
+    if (!texture_size_supported(&description))
+        return 0;
+    face = xgpu_texture_face_size(&description);
+    size = face * (description.cube_map ? 6u : 1u);
+    return size;
+}
+
+
+/* Bounded manifest helper for the capture audit.  Fills:
+ * out[0..5] = raw guest header words 0..5
+ * out[6]=format out[7]=width out[8]=height out[9]=depth
+ * out[10]=levels out[11]=pitch out[12]=compressed out[13]=cube
+ * out[14]=linear out[15]=face_bytes out[16]=total_bytes
+ * Returns 1 when the guest source range is valid. */
+
+/* 64-bit accounting for the audit manifest; the renderer continues to use
+ * the existing 32-bit face size for upload bounds. */
+static uint64_t manifest_level_bytes(const struct xgpu_texture_description *description,
+                                     unsigned long level)
+{
+    struct format_information information = format_information(description->format);
+    uint64_t width = level_dimension(description->width, level);
+    uint64_t height = level_dimension(description->height, level);
+    uint64_t depth = level_dimension(description->depth, level);
+    if (description->compressed)
+        return ((width + 3) / 4) * ((height + 3) / 4) * information.bytes * depth;
+    if (description->linear)
+        return (uint64_t)description->pitch * height;
+    return width * height * depth * information.bytes;
+}
+
+static uint64_t manifest_face_size(const struct xgpu_texture_description *description)
+{
+    uint64_t size = 0;
+    unsigned long index;
+    for (index = 0; index < description->levels; index++)
+        size += manifest_level_bytes(description, index);
+    if (description->cube_map)
+        size = (size + D3DTEXTURE_CUBEFACE_ALIGNMENT - 1) &
+               ~(uint64_t)(D3DTEXTURE_CUBEFACE_ALIGNMENT - 1);
+    return size;
+}
+
+__declspec(dllexport) int noble_d3d8_texture_manifest(const uint32_t *resource,
+                                                      uint32_t *out)
+{
+    struct xgpu_texture_description description;
+    uint64_t face, total;
+    uintptr_t start, end;
+    int i;
+    if (!resource || !out)
+        return 0;
+    for (i = 0; i < 6; i++)
+        out[i] = resource[i];
+    xgpu_texture_describe(resource[3], resource[4], &description);
+    face = manifest_face_size(&description);
+    total = face * (description.cube_map ? 6u : 1u);
+    out[6] = description.format;
+    out[7] = description.width;
+    out[8] = description.height;
+    out[9] = description.depth;
+    out[10] = description.levels;
+    out[11] = description.pitch;
+    out[12] = description.compressed ? 1 : 0;
+    out[13] = description.cube_map ? 1 : 0;
+    out[14] = description.linear ? 1 : 0;
+    out[15] = face > 0xFFFFFFFFULL ? 0 : (uint32_t)face;
+    out[16] = total > 0xFFFFFFFFULL ? 0 : (uint32_t)total;
+    out[17] = xgpu_render_target_find(resource[1]) != NULL;
+    out[18] = total > 0xFFFFFFFFULL ? 1 : 0;
+    start = (uintptr_t)noble_phys_to_virt(resource[1]);
+    end = start + (total ? total - 1 : 0);
+    return total && !out[18] && platform_is_contiguous((void *)start) &&
+           platform_is_contiguous((void *)end) &&
+           platform_range_mapped((const void *)start, (size_t)total);
 }

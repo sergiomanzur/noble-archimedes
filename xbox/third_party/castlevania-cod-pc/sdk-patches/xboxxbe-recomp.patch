@@ -1,0 +1,1257 @@
+diff --git a/cmake/XbeRecomp.cmake b/cmake/XbeRecomp.cmake
+index 22e033f..ee09c7e 100644
+--- a/cmake/XbeRecomp.cmake
++++ b/cmake/XbeRecomp.cmake
+@@ -82,6 +82,14 @@ set_source_files_properties(${XBE_SDK_DIR}/runtime/core/input.cpp PROPERTIES INC
+ # release leaves it out and the executable builds it from the player's xbe (runtime/app/game_code.cpp, which compiles
+ # with the same flags). Expects assets/<xbe> and the config's out = "generated/<game_dir>". At run time the game may be
+ # a disc image instead.
++# a little endian 32 bit field of a file
++function(xbe_u32 file offset out)
++    file(READ ${file} hex OFFSET ${offset} LIMIT 4 HEX)
++    string(REGEX REPLACE "(..)(..)(..)(..)" "\\4\\3\\2\\1" hex "${hex}")
++    math(EXPR value "0x${hex}")
++    set(${out} ${value} PARENT_SCOPE)
++endfunction()
++
+ function(add_xbe_image target xbe config partitions game_dir)
+     set(GEN ${CMAKE_CURRENT_SOURCE_DIR}/generated/${game_dir})
+     set(GEN_SOURCES ${GEN}/x86_func_mapping.cpp)
+@@ -107,9 +115,22 @@ function(add_xbe_image target xbe config partitions game_dir)
+     set(xbe_file ${CMAKE_CURRENT_SOURCE_DIR}/assets/${xbe})
+     set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${xbe_file})
+     file(SHA1 ${xbe_file} xbe_sha1)
++    # and its certificate's title name, allowed media, region and ratings, which copies of the release often have
++    # patched: the executable puts these back to tell such a copy is this release (runtime/app/game_files.cpp)
++    xbe_u32(${xbe_file} 260 xbe_base)  # 0x104 image base
++    xbe_u32(${xbe_file} 280 xbe_cert)  # 0x118 certificate
++    math(EXPR xbe_cert "${xbe_cert} - ${xbe_base}")
++    math(EXPR xbe_title "${xbe_cert} + 12")    # +0x0C title name, 80 bytes
++    math(EXPR xbe_media "${xbe_cert} + 156")   # +0x9C allowed media, region, ratings
++    file(READ ${xbe_file} xbe_title OFFSET ${xbe_title} LIMIT 80 HEX)
++    file(READ ${xbe_file} xbe_media OFFSET ${xbe_media} LIMIT 12 HEX)
++    string(REGEX REPLACE "(..)" "0x\\1," xbe_cert_bytes "${xbe_title}${xbe_media}")
+     set(XBE_HASH ${CMAKE_CURRENT_BINARY_DIR}/${target}_xbe.cpp)
+-    file(CONFIGURE OUTPUT ${XBE_HASH} CONTENT "extern const char kImageSha1[] = \"${xbe_sha1}\";\n")
++    file(CONFIGURE OUTPUT ${XBE_HASH} CONTENT "extern const char kImageSha1[] = \"${xbe_sha1}\";
++extern const unsigned char kImageCertificate[92] = {${xbe_cert_bytes}};
++")
+     add_executable(${target} WIN32 ${XBE_RUNTIME_SOURCES} ${XBE_HOST_SOURCES} ${GAME_SOURCES} ${XBE_IMGUI_SOURCES} ${XBE_HASH})
++    set_target_properties(${target} PROPERTIES XBE_SHA1 ${xbe_sha1} XBE_CERTIFICATE "${xbe_cert_bytes}")  # xbe_releases()
+     add_dependencies(${target} recompile_${target} compiler_files)
+     # the import library of what the executable exports to its DLL goes to the compiler folder
+     set_target_properties(${target} PROPERTIES ENABLE_EXPORTS ON ARCHIVE_OUTPUT_DIRECTORY ${XBE_COMPILER_DIR})
+@@ -138,3 +159,29 @@ function(add_xbe_image target xbe config partitions game_dir)
+     add_custom_command(TARGET ${target}_code POST_BUILD
+         COMMAND ${CMAKE_COMMAND} -E rm -f ${XBE_COMPILER_DIR}/work/${target}/built.txt)
+ endfunction()
++
++# A game's releases (each region's xbe, recompiled into its executable by add_xbe_image) for GameInfo::releases: writes
++# <file> with kReleases[kReleaseCount], each an xbe's SHA-1, its certificate's bytes and its executable's name, to
++# link into those executables, and into a launcher that tells them apart
++function(xbe_releases file)
++    set(certificates "")
++    set(list "")
++    set(i 0)
++    foreach(target ${ARGN})
++        get_target_property(sha ${target} XBE_SHA1)
++        get_target_property(certificate ${target} XBE_CERTIFICATE)
++        string(APPEND certificates "const unsigned char kCertificate${i}[92] = {${certificate}};\n")
++        string(APPEND list "    {\"${sha}\", kCertificate${i}, \"${target}\"},\n")
++        math(EXPR i "${i} + 1")
++    endforeach()
++    file(CONFIGURE OUTPUT ${file} CONTENT "// the game's releases, written by CMake (xbe_releases)
++#include \"app/app.h\"
++
++namespace {
++${certificates}}  // namespace
++
++extern const app::GameInfo::Release kReleases[] = {
++${list}};
++extern const unsigned kReleaseCount = ${i};
++")
++endfunction()
+diff --git a/runtime/app/app.h b/runtime/app/app.h
+index e1c1254..e2b9fdd 100644
+--- a/runtime/app/app.h
++++ b/runtime/app/app.h
+@@ -26,7 +26,9 @@ struct Settings {
+     bool custom_textures = true;     // images in textures\replacement\ beside the exe replace the game's
+     bool dump_textures = false;      // each texture once into textures\dumps\ beside the exe
+     uint32_t texture_dump_format = 0;  // 0 PNG, 1 DDS
++    bool widescreen = true;          // false: 4:3 on a wide output too
+     std::string join_ip;                   // co-op: a host past the LAN the system link search also asks
++    std::string gpu;                       // the graphics card drawn with, by its name; empty: the fastest
+ };
+ 
+ Settings& Get();
+@@ -41,7 +43,8 @@ struct Mode {
+ Mode Desktop();
+ Mode Output();
+ float RenderScale(uint32_t guest_height);
+-// the output is 3:2 or wider: the console reports a widescreen TV and the frame is shown 16:9, else 4:3 as on a 4:3 TV
++// the output is 3:2 or wider and widescreen is on: the console reports a widescreen TV and the frame is shown 16:9,
++// else 4:3 as on a 4:3 TV
+ bool Widescreen();
+ 
+ std::filesystem::path ExeDir();
+@@ -86,6 +89,14 @@ struct GameInfo {
+     const wchar_t* splash;       // .bmp or .png beside the exe
+     const wchar_t* missing;      // message when neither the game files nor a disc image are found
+     std::vector<std::pair<const char*, const char*>> images;  // xbe file name, executable name
++    // the game's other releases (another region's), each recompiled into an executable of its own: game files with
++    // one of their xbes start that executable instead (game_files.cpp)
++    struct Release {
++        const char* sha1;                  // its xbe's, lower case hex
++        const unsigned char* certificate;  // its certificate's title name (80 bytes), allowed media, region, ratings (12)
++        const char* exe;                   // beside this one, without .exe
++    };
++    std::vector<Release> releases;
+     std::vector<Option> options;
+     // the settings file's toml::table, for what options cannot hold
+     void (*load)(const void* table);
+@@ -98,6 +109,9 @@ struct GameInfo {
+     void (*ui)(double fps);        // each frame inside the ImGui frame, UiLock held
+     void (*pad)(int port, input::Pad& pad);  // a polled pad before the game gets it
+     void (*rumble)(int port, uint16_t& left, uint16_t& right);
++    // the console's language as XGetLanguage gives it (1 English, 2 Japanese, 3 German, 4 French, 5 Spanish,
++    // 6 Italian, 7 Korean, 8 Chinese, 9 Portuguese); English when null
++    uint32_t (*language)();
+ };
+ extern const GameInfo kGame;
+ 
+diff --git a/runtime/app/game_code.cpp b/runtime/app/game_code.cpp
+index 0582ed9..c2f7610 100644
+--- a/runtime/app/game_code.cpp
++++ b/runtime/app/game_code.cpp
+@@ -88,24 +88,28 @@ int64_t NowMs() {
+ 
+ fs::path CompilerDir() { return ExeDir() / "compiler"; }
+ 
+-// the config in compiler\config whose [xbe] path is this xbe; an included one has no path
+-fs::path ConfigFor(const std::string& xbe) {
++// the config in compiler\config whose [xbe] path is this xbe (an included one has no path), the one whose library is
++// this executable's DLL first: two releases of a game have an xbe of the same name, each its own executable
++fs::path ConfigFor(const std::string& xbe, const std::string& exe) {
+     std::error_code ec;
++    fs::path first;
+     for (auto& e : fs::directory_iterator(CompilerDir() / "config", ec)) {
+         try {
+             toml::table t = toml::parse_file(e.path().string());
+-            if (fs::path(t["xbe"]["path"].value_or(std::string())).filename() == xbe) return e.path();
++            if (fs::path(t["xbe"]["path"].value_or(std::string())).filename() != xbe) continue;
++            if (t["xbe"]["library"].value_or(std::string()) == exe + ".dll") return e.path();
++            if (first.empty()) first = e.path();
+         } catch (const toml::parse_error&) {
+         }
+     }
+-    return {};
++    return first;
+ }
+ 
+ std::vector<Image> Images() {
+     std::vector<Image> images;
+     for (auto& [xbe, exe] : kGame.images) {
+         std::string name = exe;
+-        images.push_back({std::wstring(name.begin(), name.end()), xbe, ConfigFor(xbe)});
++        images.push_back({std::wstring(name.begin(), name.end()), xbe, ConfigFor(xbe, name)});
+     }
+     return images;
+ }
+diff --git a/runtime/app/game_files.cpp b/runtime/app/game_files.cpp
+index 4570d3b..09c67b4 100644
+--- a/runtime/app/game_files.cpp
++++ b/runtime/app/game_files.cpp
+@@ -9,6 +9,7 @@
+ #include <windows.h>
+ 
+ #include <algorithm>
++#include <cstring>
+ #include <cwctype>
+ #include <fstream>
+ 
+@@ -19,6 +20,8 @@
+ #include "kernel/disc.h"
+ 
+ extern const char kImageSha1[];  // the xbe recompiled into this executable, written by CMake
++// its certificate's title name (80 bytes), then allowed media, region and ratings (12)
++extern const unsigned char kImageCertificate[92];
+ 
+ namespace app {
+ 
+@@ -26,6 +29,59 @@ namespace {
+ 
+ namespace fs = std::filesystem;
+ 
++// Copies of a release often have their certificate's title name, allowed media and region patched (for a hard disk
++// loader, or for any region's console), the signed sections left alone. Put back as the release with this SHA-1 has
++// them, such a copy is that release, and the game runs that: true with the xbe restored.
++bool RestoreCertificate(std::vector<uint8_t>& xbe, const char* sha1, const unsigned char* certificate) {
++    if (xbe.size() < 0x11C) return false;
++    uint32_t base, cert;
++    memcpy(&base, &xbe[0x104], 4);
++    memcpy(&cert, &xbe[0x118], 4);
++    if (cert < base || uint64_t(cert - base) + 0xA8 > xbe.size()) return false;
++    std::vector<uint8_t> copy = xbe;
++    memcpy(&copy[cert - base + 0x0C], certificate, 80);
++    memcpy(&copy[cert - base + 0x9C], certificate + 80, 12);
++    if (Sha1(copy) != sha1) return false;
++    xbe = std::move(copy);
++    return true;
++}
++
++// the game's other release this xbe is, as GameInfo::releases names them, with its executable beside this one
++const GameInfo::Release* OtherRelease(const std::vector<uint8_t>& xbe, const std::string& sha) {
++    for (const GameInfo::Release& release : kGame.releases) {
++        std::vector<uint8_t> copy = xbe;
++        std::error_code ec;
++        if ((sha == release.sha1 || RestoreCertificate(copy, release.sha1, release.certificate)) &&
++            fs::exists(ExeDir() / (std::string(release.exe) + ".exe"), ec))
++            return &release;
++    }
++    return nullptr;
++}
++
++// That release's executable with this one's arguments, for as long as it runs: this process ends with its exit code,
++// so whatever started the game (a launcher, Steam) sees it run until it ends. Returns when it could not start.
++void RunRelease(const GameInfo::Release& release) {
++    fs::path exe = ExeDir() / (std::string(release.exe) + ".exe");
++    std::wstring line = GetCommandLineW();
++    size_t args = line[0] == L'"' ? line.find(L'"', 1) + 1 : line.find(L' ');
++    line = L"\"" + exe.wstring() + L"\"" + (args == std::wstring::npos ? L"" : line.substr(args));
++    line += L" --handed-over";  // its log carries on this one's (main.cpp)
++    STARTUPINFOW si{sizeof(si)};
++    PROCESS_INFORMATION pi{};
++    if (!CreateProcessW(exe.c_str(), line.data(), nullptr, nullptr, FALSE, 0, nullptr, nullptr, &si, &pi)) {
++        LOGE("game: cannot start %s.exe (%lu)", release.exe, GetLastError());
++        return;
++    }
++    LOGR("Game: another release's, handed to %s.exe", release.exe);
++    logx::Flush();
++    AllowSetForegroundWindow(pi.dwProcessId);
++    CloseHandle(pi.hThread);
++    WaitForSingleObject(pi.hProcess, INFINITE);
++    DWORD code = 1;
++    GetExitCodeProcess(pi.hProcess, &code);
++    ExitProcess(code);
++}
++
+ // assets beside the exe or in any folder above it (the build output)
+ fs::path FindAssets() {
+     auto dir = ExeDir();
+@@ -73,19 +129,28 @@ bool FindGame(GameFiles& game) {
+         }
+     std::sort(isos.begin(), isos.end());
+ 
+-    // the first copy with this xbe wins, the extracted files before any image; another release is kept to offer
++    // the first copy with this xbe wins, the extracted files before any image; else the first of a release another
++    // executable was made from runs there; another release is kept to offer
+     GameFiles other;
+     std::unique_ptr<kernel::Disc> other_disc;
+     fs::path other_name;
++    const GameInfo::Release* release = nullptr;
+     auto consider = [&](const fs::path& name, std::vector<uint8_t> xbe, std::unique_ptr<kernel::Disc> disc) {
+         std::string sha = Sha1(xbe);
+         bool match = sha == kImageSha1;
+-        LOGR("Game: %s in %s, sha1 %s%s", IMAGE_XBE, name.string().c_str(), sha.c_str(), match ? "" : ", another release");
+-        if (match) {
++        bool restored = !match && RestoreCertificate(xbe, kImageSha1, kImageCertificate);
++        const GameInfo::Release* known = match || restored ? nullptr : OtherRelease(xbe, sha);
++        LOGR("Game: %s in %s, sha1 %s%s", IMAGE_XBE, name.string().c_str(), sha.c_str(),
++             match      ? ""
++             : restored ? ", this release with its certificate patched, put back"
++             : known    ? ", the release of another executable"
++                        : ", another release");
++        if (match || restored) {
+             game = {assets, std::move(xbe)};
+             kernel::MountDisc(std::move(disc));
+             return true;
+         }
++        if (known && !release) release = known;
+         if (other_name.empty()) {
+             other = {assets, std::move(xbe)};
+             other_disc = std::move(disc);
+@@ -110,6 +175,7 @@ bool FindGame(GameFiles& game) {
+         if (consider(iso, std::move(xbe), std::move(disc))) return true;
+     }
+ 
++    if (release) RunRelease(*release);  // returns only when it could not start
+     if (other_name.empty()) {
+         MessageBoxW(nullptr, kGame.missing, kGame.short_title, MB_ICONERROR);
+         return false;
+diff --git a/runtime/app/main.cpp b/runtime/app/main.cpp
+index e36f7ac..d207b3e 100644
+--- a/runtime/app/main.cpp
++++ b/runtime/app/main.cpp
+@@ -244,11 +244,13 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int) {
+     std::signal(SIGABRT, [](int) { app::WriteCrashDump(nullptr); });
+     timeBeginPeriod(1);
+     SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+-    // one log a session: a relaunch into another image carries on its predecessor's
++    // one log a session: a relaunch into another image carries on its predecessor's, as does another release's
++    // executable the game files were handed to (game_files.cpp)
+     bool relaunched = std::wcsstr(GetCommandLineW(), L"--relaunched") != nullptr;
++    bool handed_over = std::wcsstr(GetCommandLineW(), L"--handed-over") != nullptr;
+     std::string log = app::kGame.log;
+     if (app::Instance() > 1) log += "-" + std::to_string(app::Instance());
+-    logx::Init((app::ExeDir() / "logs").string(), log, relaunched);
++    logx::Init((app::ExeDir() / "logs").string(), log, relaunched || handed_over);
+     app::Load();
+     if (app::kGame.init) app::kGame.init();
+     if (relaunched && !logx::kVerbose) LOGR("Relaunched: %s", IMAGE_XBE);
+diff --git a/runtime/app/settings.cpp b/runtime/app/settings.cpp
+index 075b3b7..d06321e 100644
+--- a/runtime/app/settings.cpp
++++ b/runtime/app/settings.cpp
+@@ -53,7 +53,9 @@ void Load() {
+     s.custom_textures = t["custom_textures"].value_or(s.custom_textures);
+     s.dump_textures = t["dump_textures"].value_or(s.dump_textures);
+     s.texture_dump_format = std::min(t["texture_dump_format"].value_or(s.texture_dump_format), 1u);
++    s.widescreen = t["widescreen"].value_or(s.widescreen);
+     s.join_ip = t["join_ip"].value_or(s.join_ip);
++    s.gpu = t["gpu"].value_or(s.gpu);
+     for (const Option& o : kGame.options) {
+         if (o.flag) *o.flag = t[o.key].value_or(*o.flag);
+         else *o.value = t[o.key].value_or(*o.value);
+@@ -75,7 +77,9 @@ toml::table Table() {
+                   {"custom_textures", s.custom_textures},
+                   {"dump_textures", s.dump_textures},
+                   {"texture_dump_format", int64_t(s.texture_dump_format)},
+-                  {"join_ip", s.join_ip}};
++                  {"widescreen", s.widescreen},
++                  {"join_ip", s.join_ip},
++                  {"gpu", s.gpu}};
+     for (const Option& o : kGame.options) {
+         if (o.flag) t.insert(o.key, *o.flag);
+         else t.insert(o.key, int64_t(*o.value));
+@@ -86,9 +90,16 @@ toml::table Table() {
+ 
+ }  // namespace
+ 
++// the keys this executable knows written over the file's, the others kept (a launcher's own settings)
+ void Save() {
++    toml::table t;
++    try {
++        t = toml::parse_file(File().string());
++    } catch (...) {
++    }
++    for (auto&& [key, value] : Table()) t.insert_or_assign(key, value);
+     std::ofstream f(File());
+-    f << Table() << "\n";
++    f << t << "\n";
+ }
+ 
+ void LogSettings() {
+@@ -127,7 +138,7 @@ bool Widescreen() {
+         Mode m = Output();
+         wide = m.width * 2 >= m.height * 3;  // 3:2 or wider
+     }
+-    return wide;
++    return wide && s.widescreen;
+ }
+ 
+ // Output for every frame: the desktop mode lookup reads the registry, so it runs again only when the resolution
+diff --git a/runtime/core/log.cpp b/runtime/core/log.cpp
+index 7e6507d..d3c271d 100644
+--- a/runtime/core/log.cpp
++++ b/runtime/core/log.cpp
+@@ -52,7 +52,9 @@ void Init(const std::string& dir, const std::string& prefix, bool append) {
+ const std::string& Path() { return g_path; }
+ 
+ void Write(Level lv, const char* fmt, ...) {
+-    if (!kVerbose && lv < Level::Error) return;
++    // XBE_VERBOSE set: a release build writes Info and Warn too, for bring-up without a debug build
++    static const bool verbose_env = std::getenv("XBE_VERBOSE") != nullptr;
++    if (!kVerbose && lv < (verbose_env ? Level::Info : Level::Error)) return;
+     char msg[4096];
+     va_list ap;
+     va_start(ap, fmt);
+diff --git a/runtime/gpu/d3d12.cpp b/runtime/gpu/d3d12.cpp
+index fe65837..c4e0d87 100644
+--- a/runtime/gpu/d3d12.cpp
++++ b/runtime/gpu/d3d12.cpp
+@@ -72,6 +72,7 @@ struct Perf {
+     double sig = 0;
+     double texup = 0;
+     double compile = 0;
++    double pso = 0;
+     double clear = 0;
+     double copy = 0;
+     double present = 0;
+@@ -94,6 +95,7 @@ struct Perf {
+     uint64_t syncs = 0;
+     uint64_t psos = 0;
+     uint64_t shaders = 0;
++    uint64_t shaders_kept = 0;  // read from the disk cache instead
+     uint64_t raw = 0;
+     uint64_t lates = 0;
+ };
+@@ -345,6 +347,10 @@ struct Tex {
+     const Tex* swap = nullptr;  // the texture pack's image drawn in its place
+     uint64_t pack_key = 0;      // its pack image is still loading
+     uint32_t pack_gen = 0;      // texturedumper::Generation the key was taken at, 0 after new bytes
++    // Extension::Replace's: the picture drawn instead, made once the extension has it
++    uint64_t repl_id = 0;
++    ComPtr<ID3D12Resource> repl;
++    uint32_t repl_levels = 0;
+ };
+ 
+ struct PsoKey {
+@@ -406,6 +412,7 @@ struct DrawTextures {
+     bool rt[4] = {};            // stage samples a render target
+     float k[4] = {1, 1, 1, 1};  // Extension::Sample's k
+     float wide[4] = {};         // host texels per console texel of a target read into a smaller one, 0 otherwise
++    bool replaced[4] = {};      // drawn from an extension's replacement, filtered across all its levels
+ };
+ 
+ // what the last draw set on the command list, so the next one sets only what differs; anything else that sets them
+@@ -549,6 +556,8 @@ private:
+     ID3D12Resource* BindTexture(const State& s, int stage, DrawTextures& stages);
+     ID3D12Resource* BindTargetTexture(const State& s, int stage, const TextureDesc& d, Target& t, bool box,
+                                       DrawTextures& stages);
++    void MakeReplacement(Tex& tx);
++    uint32_t repl_budget_ = 0;  // replacements made this frame, a few at most so none stalls a frame
+     ID3D12Resource* BindGuestTexture(const State& s, int stage, const TextureDesc& d, const FormatInfo& fi,
+                                      DrawTextures& stages);
+     bool CreateTexture(Tex& tx, const TextureDesc& d, const FormatInfo& fi, uint64_t key);
+@@ -583,7 +592,7 @@ private:
+     void SetTextureViewsAndSamplers(const State& s, const Assembled& a, DrawTextures& stages);
+     uint32_t EnsureViewSet(const DrawTextures& stages);
+     uint32_t EnsureStageSamplers(const State& s, const DrawTextures& stages, bool clamp);
+-    void SetViewportScissor(const State& s, uint32_t gw);
++    void SetViewportScissor(const State& s, GuestExtent size);
+     void SetBlendFactorStencilRef(const State& s);
+     void UpdateTargetUsed(uint32_t data);
+     void DrawGeometry(const Assembled& a);
+@@ -833,10 +842,22 @@ bool D3D12Backend::CreateDevice() {
+         if (SUCCEEDED(D3D12GetDebugInterface(IID_PPV_ARGS(&dbg)))) dbg->EnableDebugLayer();
+     }
+     if (FAILED(CreateDXGIFactory2(0, IID_PPV_ARGS(&factory_)))) return false;
+-    // dedicated GPU first on hybrid laptops
++    // the graphics card the settings name, else the fastest: the dedicated GPU first on hybrid laptops
+     ComPtr<IDXGIFactory6> f6;
+     ComPtr<IDXGIAdapter1> adapter;
+-    if (SUCCEEDED(factory_.As(&f6))) {
++    if (const std::string& want = app::Get().gpu; !want.empty()) {
++        ComPtr<IDXGIAdapter1> a;
++        for (UINT i = 0; !adapter && factory_->EnumAdapters1(i, &a) != DXGI_ERROR_NOT_FOUND; i++) {
++            DXGI_ADAPTER_DESC1 d{};
++            a->GetDesc1(&d);
++            char name[sizeof(d.Description)];
++            WideCharToMultiByte(CP_UTF8, 0, d.Description, -1, name, sizeof(name), nullptr, nullptr);
++            if (want == name && SUCCEEDED(D3D12CreateDevice(a.Get(), D3D_FEATURE_LEVEL_11_0, __uuidof(ID3D12Device), nullptr)))
++                adapter = a;
++        }
++        if (!adapter) LOGR("D3D12: no graphics card %s with Direct3D 12 here, the fastest one instead", want.c_str());
++    }
++    if (!adapter && SUCCEEDED(factory_.As(&f6))) {
+         f6->EnumAdapterByGpuPreference(0, DXGI_GPU_PREFERENCE_HIGH_PERFORMANCE, IID_PPV_ARGS(&adapter));
+     }
+     if (FAILED(D3D12CreateDevice(adapter.Get(), D3D_FEATURE_LEVEL_11_0, IID_PPV_ARGS(&dev_))) &&
+@@ -1201,10 +1222,12 @@ bool D3D12Backend::BindTargets(const State& s) {
+         if (LatchCpuWrite(*rt)) UploadTarget(*rt, s.rt);
+         Transition(rt->res.Get(), rt->state, D3D12_RESOURCE_STATE_RENDER_TARGET);
+         rt->drawn = true;
++        rt->cpu = false;
+     }
+     if (ds) {
+         Transition(ds->res.Get(), ds->state, D3D12_RESOURCE_STATE_DEPTH_WRITE);
+         ds->drawn = true;
++        ds->cpu = false;
+     }
+     if (rt != bound_rt_ || ds != bound_ds_) {
+         D3D12_CPU_DESCRIPTOR_HANDLE rh = rt ? Cpu(rtv_heap_.Get(), rt->view, rtv_inc_) : D3D12_CPU_DESCRIPTOR_HANDLE{};
+@@ -1262,6 +1285,7 @@ void D3D12Backend::DrawDepthCopy(Target& src, Target& dst, ID3D12PipelineState*
+     Alloc cb = Upload(256, 256);
+     DrawFullScreen(pso, cb.gpu, slot);
+     dst.drawn = true;
++    dst.cpu = false;
+     bound_rt_ = bound_ds_ = nullptr;
+ }
+ 
+@@ -1350,6 +1374,7 @@ void D3D12Backend::UploadTarget(Target& t, const Surface& s) {
+     CurrentFrame().garbage.push_back(tex);
+     t.epoch = DirtyEpoch(t.data);
+     t.sig = MemSig(t.data, t.bytes);
++    t.cpu = true;
+ }
+ 
+ // samplers_ key of the full screen passes' samplers, apart from the stage samplers' hashed keys
+@@ -1414,6 +1439,64 @@ void D3D12Backend::Blit(ID3D12Resource* src, DXGI_FORMAT fmt, const float uvrect
+     DrawFullScreen(EnsureBlitPipeline(o.rtv, o.over), cb.gpu, slot, si);
+ }
+ 
++namespace {
++
++constexpr UINT kCompileFlags = D3DCOMPILE_OPTIMIZATION_LEVEL1;
++
++// compiled shaders kept between sessions, a file each: <exe>/cache/shaders, or the folder XBE_SHADER_CACHE names. A
++// shader takes some 25 ms to compile the first time it is drawn, more than a frame; its file reads in well under a
++// millisecond. Empty when the folder cannot be made: nothing kept then.
++const std::filesystem::path& ShaderCacheDir() {
++    static const std::filesystem::path dir = [] {
++        const wchar_t* v = _wgetenv(L"XBE_SHADER_CACHE");
++        std::filesystem::path d = v && *v ? std::filesystem::path(v) : app::ExeDir() / "cache" / "shaders";
++        std::error_code ec;
++        std::filesystem::create_directories(d, ec);
++        return ec ? std::filesystem::path() : d;
++    }();
++    return dir;
++}
++
++// the file of a shader: its key is its source's hash with the compile flags, so a change to either is a new file
++std::filesystem::path ShaderFile(uint64_t key) {
++    char name[24];
++    std::snprintf(name, sizeof(name), "%016llx.cso", (unsigned long long)key);
++    return ShaderCacheDir() / name;
++}
++
++// a file is the blob behind its size and hash: one cut short or changed is not read, and the shader compiles again
++ComPtr<ID3DBlob> LoadShader(uint64_t key) {
++    if (ShaderCacheDir().empty()) return nullptr;
++    FILE* f = _wfopen(ShaderFile(key).c_str(), L"rb");
++    if (!f) return nullptr;
++    uint64_t head[2] = {};  // size, hash
++    ComPtr<ID3DBlob> blob;
++    bool ok = std::fread(head, sizeof(head), 1, f) == 1 && head[0] && head[0] < (16u << 20) &&
++              SUCCEEDED(D3DCreateBlob(SIZE_T(head[0]), &blob)) &&
++              std::fread(blob->GetBufferPointer(), 1, size_t(head[0]), f) == head[0] &&
++              Hash(blob->GetBufferPointer(), size_t(head[0])) == head[1];
++    std::fclose(f);
++    return ok ? blob : nullptr;
++}
++
++// written beside it and renamed, so a file is whole or not there, whichever instance wrote it
++void SaveShader(uint64_t key, ID3DBlob* blob) {
++    if (ShaderCacheDir().empty()) return;
++    std::filesystem::path file = ShaderFile(key), tmp = file;
++    tmp += "." + std::to_string(GetCurrentProcessId()) + ".tmp";
++    FILE* f = _wfopen(tmp.c_str(), L"wb");
++    if (!f) return;
++    uint64_t head[2] = {blob->GetBufferSize(), Hash(blob->GetBufferPointer(), blob->GetBufferSize())};
++    bool ok = std::fwrite(head, sizeof(head), 1, f) == 1 &&
++              std::fwrite(blob->GetBufferPointer(), 1, blob->GetBufferSize(), f) == blob->GetBufferSize();
++    ok = std::fclose(f) == 0 && ok;
++    std::error_code ec;
++    if (ok) std::filesystem::rename(tmp, file, ec);
++    if (!ok || ec) std::filesystem::remove(tmp, ec);
++}
++
++}  // namespace
++
+ ID3DBlob* D3D12Backend::Compile(const std::string& src, const char* entry, const char* profile, uint64_t& hash) {
+     // one source can hold several entry points
+     uint64_t profile_seed = Hash(profile, std::strlen(profile));
+@@ -1421,12 +1504,18 @@ ID3DBlob* D3D12Backend::Compile(const std::string& src, const char* entry, const
+     hash = Hash(src.data(), src.size(), entry_seed);
+     auto it = blobs_.find(hash);
+     if (it != blobs_.end()) return it->second.Get();
++    PerfScope perf_compile{g_perf.compile};
++    uint64_t key = Hash(&kCompileFlags, sizeof(kCompileFlags), hash);
++    if (ComPtr<ID3DBlob> kept = LoadShader(key)) {
++        g_perf.shaders_kept++;
++        blobs_[hash] = kept;
++        return kept.Get();
++    }
+     ComPtr<ID3DBlob> code;
+     ComPtr<ID3DBlob> err;
+-    PerfScope perf_compile{g_perf.compile};
+     g_perf.shaders++;
+-    HRESULT hr = D3DCompile(src.data(), src.size(), nullptr, nullptr, nullptr, entry, profile,
+-                            D3DCOMPILE_OPTIMIZATION_LEVEL1, 0, &code, &err);
++    HRESULT hr = D3DCompile(src.data(), src.size(), nullptr, nullptr, nullptr, entry, profile, kCompileFlags, 0,
++                            &code, &err);
+     if (FAILED(hr)) {
+         LOGE("d3d12: %s compile failed: %s", profile, err ? static_cast<const char*>(err->GetBufferPointer()) : "?");
+         LOGE("%s", src.c_str());
+@@ -1434,6 +1523,7 @@ ID3DBlob* D3D12Backend::Compile(const std::string& src, const char* entry, const
+         return nullptr;
+     }
+     blobs_[hash] = code;
++    SaveShader(key, code.Get());
+     return code.Get();
+ }
+ 
+@@ -1674,6 +1764,7 @@ ID3D12PipelineState* D3D12Backend::EnsurePipeline(const PsoKey& k, ID3DBlob* vs,
+     if (k.topo == uint32_t(Topology::Points)) ExpandPoints(d, k.sprite);
+     ComPtr<ID3D12PipelineState> pso;
+     g_perf.psos++;
++    PerfScope perf_pso{g_perf.pso};
+     if (FAILED(dev_->CreateGraphicsPipelineState(&d, IID_PPV_ARGS(&pso)))) LOGE("d3d12: pipeline creation failed");
+     psos_[h] = pso;
+     return pso.Get();
+@@ -1727,6 +1818,7 @@ bool SameTexture(const Tex& tx, const TextureDesc& d) {
+ bool D3D12Backend::CreateTexture(Tex& tx, const TextureDesc& d, const FormatInfo& fi, uint64_t key) {
+     g_perf.newtex++;
+     if (tx.res) CurrentFrame().garbage.push_back(tx.res);
++    if (tx.repl) CurrentFrame().garbage.push_back(tx.repl);
+     tx = Tex{};
+     tx.d = d;
+     tx.fmt = HostFormat(fi.host);
+@@ -1843,6 +1935,39 @@ void ReadStagePalette(const State& s, int stage, const TextureDesc& d, StagePale
+     palette.hash = Hash(palette.colours, sizeof(palette.colours));
+ }
+ 
++// the extension's replacement for a texture, once it has the pixels: a texture of its own with every level
++void D3D12Backend::MakeReplacement(Tex& tx) {
++    std::shared_ptr<const Replacement> r = ext_->Replaced(tx.repl_id);
++    if (!r) return;  // still loading
++    if (r->levels.empty()) {
++        tx.repl_id = 0;  // none after all: drawn as the title made it
++        return;
++    }
++    repl_budget_--;
++    D3D12_HEAP_PROPERTIES hp{D3D12_HEAP_TYPE_DEFAULT};
++    D3D12_RESOURCE_DESC td{};
++    td.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
++    td.Width = r->width;
++    td.Height = r->height;
++    td.DepthOrArraySize = 1;
++    td.MipLevels = UINT16(r->levels.size());
++    td.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
++    td.SampleDesc.Count = 1;
++    Tex up;
++    if (FAILED(dev_->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &td, D3D12_RESOURCE_STATE_COPY_DEST, nullptr,
++                                             IID_PPV_ARGS(&up.res)))) {
++        tx.repl_id = 0;  // drawn as the title made it
++        return;
++    }
++    up.levels = uint32_t(r->levels.size());
++    for (uint32_t l = 0; l < up.levels; l++)
++        UploadTextureLevel(up, 0, l, r->levels[l], std::max(r->width >> l, 1u) * 4);
++    D3D12_RESOURCE_STATES st = D3D12_RESOURCE_STATE_COPY_DEST;
++    Transition(up.res.Get(), st, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
++    tx.repl = up.res;
++    tx.repl_levels = up.levels;
++}
++
+ // a texture in guest memory: made again when its layout changed, uploaded again when its bytes did
+ ID3D12Resource* D3D12Backend::BindGuestTexture(const State& s, int stage, const TextureDesc& d, const FormatInfo& fi,
+                                                DrawTextures& stages) {
+@@ -1870,8 +1995,24 @@ ID3D12Resource* D3D12Backend::BindGuestTexture(const State& s, int stage, const
+             tx.sig = sig;
+             UploadTexture(tx, d, fi, p, colours, same);
+             tx.pack_gen = 0;
++            uint64_t id = ext_ ? ext_->Replace(d, p, colours) : 0;
++            if (id != tx.repl_id) {
++                if (tx.repl) CurrentFrame().garbage.push_back(tx.repl);
++                tx.repl.Reset();
++                tx.repl_id = id;
++            }
+         }
+     }
++    if (tx.repl_id && !tx.repl && repl_budget_) MakeReplacement(tx);
++    // an extension's replacement is drawn before the texture pack's image
++    if (tx.repl) {
++        FillTextureView(tx, d, stages.sv[stage]);
++        stages.sv[stage].Format = DXGI_FORMAT_B8G8R8A8_UNORM;
++        stages.sv[stage].Texture2D.MipLevels = tx.repl_levels;
++        stages.replaced[stage] = true;
++        if (ext_) ext_->Sampled(d, nullptr, tx.flags, info);
++        return tx.repl.Get();
++    }
+     if (tx.pack_gen != texturedumper::Generation()) LatchPackKey(tx, d, fi, colours);
+     if (tx.pack_key) LatchPackImage(tx);
+     const Tex& drawn = tx.swap ? *tx.swap : tx;
+@@ -1982,8 +2123,15 @@ D3D12_SAMPLER_DESC StageSampler(const State& s, int i, const DrawTextures& stage
+     sd.Filter = D3D12_FILTER(fmin << 4 | fmag << 2 | fmip);
+     bool anisotropic = min == kTexfAnisotropic || mag == kTexfAnisotropic;
+     uint32_t an = anisotropic ? std::max<uint32_t>(t[kTssMaxAnisotropy], 1) : 1;
+-    // forced only where the title filters across mip levels and the texture has them
+-    if (aniso && lin(min) && mip && stages.sv[i].Texture2D.MipLevels > 1 && !stages.info[i].shadow) an = aniso;
++    // a replacement is far larger than the console's texture: filtered across its levels whatever the title asked
++    if (stages.replaced[i]) {
++        mip = kTexfLinear;
++        sd.Filter = D3D12_FILTER(fmin << 4 | fmag << 2 | D3D12_FILTER_TYPE_LINEAR);
++    }
++    // forced wherever the title filters a texture linearly as it shrinks, whether or not it has mip levels: a title
++    // whose textures have none (Castlevania's) gets its samples along a slope from level 0, where surfaces seen at an
++    // angle shimmer without them; a quad drawn flat to the screen samples the same as before
++    if (aniso && lin(min) && !stages.info[i].shadow) an = aniso;
+     if (an > 1) {
+         sd.Filter = D3D12_FILTER_ANISOTROPIC;
+         sd.MaxAnisotropy = std::min<uint32_t>(an, 16);
+@@ -1993,7 +2141,7 @@ D3D12_SAMPLER_DESC StageSampler(const State& s, int i, const DrawTextures& stage
+     sd.AddressV = Address(clamp && t[kTssAddressV] == kTaddressWrap ? kTaddressClamp : t[kTssAddressV]);
+     sd.AddressW = Address(t[kTssAddressW]);
+     sd.MipLODBias = Bits(t[kTssMipLodBias]);
+-    sd.MinLOD = float(t[kTssMaxMipLevel]);
++    sd.MinLOD = stages.replaced[i] ? 0.0f : float(t[kTssMaxMipLevel]);
+     sd.MaxLOD = mip ? D3D12_FLOAT32_MAX : sd.MinLOD;
+     Color(t[kTssBorderColor], sd.BorderColor);
+     if (stages.info[i].shadow) {
+@@ -2218,6 +2366,22 @@ void FillFogConstants(const State& s, bool vertex_program, DrawConstants& c) {
+     c.fog[3] = float(s.rs[kRsFogTableMode]);
+ }
+ 
++// D3DRS_MULTISAMPLEMODE on the back buffer, D3DRS_MULTISAMPLERENDERTARGETMODE on any other target: on a linear surface
++// 2X and 4X draw on a grid of half its columns, 4X of half its rows too, which the hardware spreads over the whole
++// surface (a title draws a 4X shadow volume on 320x240 over a 640x480 back buffer)
++GuestExtent MultisampleGrid(const State& s, const Surface& target, GuestExtent size) {
++    constexpr uint32_t kMode2x = 1;  // D3DMULTISAMPLEMODE_2X
++    constexpr uint32_t kMode4x = 2;  // D3DMULTISAMPLEMODE_4X
++    uint32_t mode = s.rt_back_buffer ? s.rs[kRsMultiSampleMode] : s.rs[kRsMultiSampleRenderTargetMode];
++    TextureDesc d;
++    if ((mode != kMode2x && mode != kMode4x) || !Describe(target.header, d) || !d.linear) return size;
++    LOG_FIRST(2, "d3d12: multisample %uX on %ux%u at %08X, drawn on %ux%u", mode * 2, size.w, size.h, target.data,
++              (size.w + 1) / 2, mode == kMode4x ? (size.h + 1) / 2 : size.h);
++    size.w = (size.w + 1) / 2;
++    if (mode == kMode4x) size.h = (size.h + 1) / 2;
++    return size;
++}
++
+ void FillSurfaceConstants(const State& s, GuestExtent size, DrawConstants& c) {
+     c.surf[0] = float(size.w);
+     c.surf[1] = float(size.h);
+@@ -2618,20 +2782,22 @@ void D3D12Backend::SetTextureViewsAndSamplers(const State& s, const Assembled& a
+ }
+ 
+ // viewport covers the target, the guest viewport is in the shader; scissor clips to it
+-void D3D12Backend::SetViewportScissor(const State& s, uint32_t gw) {
++void D3D12Backend::SetViewportScissor(const State& s, GuestExtent size) {
+     float W = float(bound_rt_ ? bound_rt_->w : bound_ds_->w);
+     float H = float(bound_rt_ ? bound_rt_->h : bound_ds_->h);
+     D3D12_VIEWPORT vp{0, 0, W, H, 0, 1};
+-    float sc = W / gw;
+-    LONG x0 = LONG(s.viewport.x * sc);
+-    LONG y0 = LONG(s.viewport.y * sc);
+-    LONG x1 = LONG((s.viewport.x + s.viewport.w) * sc);
+-    LONG y1 = LONG((s.viewport.y + s.viewport.h) * sc);
++    // by axis: a multisampled grid may be narrower than the target and not shorter
++    float sx = W / size.w;
++    float sy = H / size.h;
++    LONG x0 = LONG(s.viewport.x * sx);
++    LONG y0 = LONG(s.viewport.y * sy);
++    LONG x1 = LONG((s.viewport.x + s.viewport.w) * sx);
++    LONG y1 = LONG((s.viewport.y + s.viewport.h) * sy);
+     if (s.scissor_count) {
+-        x0 = std::max(x0, LONG(s.scissors[0] * sc));
+-        y0 = std::max(y0, LONG(s.scissors[1] * sc));
+-        x1 = std::min(x1, LONG(s.scissors[2] * sc));
+-        y1 = std::min(y1, LONG(s.scissors[3] * sc));
++        x0 = std::max(x0, LONG(s.scissors[0] * sx));
++        y0 = std::max(y0, LONG(s.scissors[1] * sy));
++        x1 = std::min(x1, LONG(s.scissors[2] * sx));
++        y1 = std::min(y1, LONG(s.scissors[3] * sy));
+     }
+     D3D12_RECT rect{std::clamp<LONG>(x0, 0, LONG(W)), std::clamp<LONG>(y0, 0, LONG(H)),
+                     std::clamp<LONG>(x1, 0, LONG(W)), std::clamp<LONG>(y1, 0, LONG(H))};
+@@ -2815,6 +2981,7 @@ void D3D12Backend::Draw(const State& s, uint32_t prim, uint32_t start, uint32_t
+     if (ext_) ext_->BeginDraw(s);
+     Assembled& a = asm_;
+     if (!AssembleDraw(s, prim, start, count, indices, a)) return;
++    if (ext_) ext_->Vertices(s, a);
+     // past the ring every upload is a buffer of its own: seconds lost on a frame that draws a whole level once
+     if (CurrentFrame().used > kUploadSize - kUploadReserve) Submit(true);
+     if (!BindTargets(s)) return;
+@@ -2848,6 +3015,7 @@ void D3D12Backend::Draw(const State& s, uint32_t prim, uint32_t start, uint32_t
+     // constants
+     GuestExtent size;
+     SurfaceSize(bound_rt_ ? s.rt : s.zs, size.w, size.h);
++    size = MultisampleGrid(s, bound_rt_ ? s.rt : s.zs, size);
+     DrawConstants c{};
+     UploadConstants(s, sh, k, stages, size, c);
+     if (ext_) binds_ = {};
+@@ -2860,7 +3028,7 @@ void D3D12Backend::Draw(const State& s, uint32_t prim, uint32_t start, uint32_t
+ 
+     // texture views and samplers, viewport and scissor, blend factor and stencil reference
+     SetTextureViewsAndSamplers(s, a, stages);
+-    SetViewportScissor(s, size.w);
++    SetViewportScissor(s, size);
+     SetBlendFactorStencilRef(s);
+ 
+     // geometry, counted while the title runs a visibility test
+@@ -2912,6 +3080,7 @@ void D3D12Backend::ClearTarget(Target& t, const State& s, const ClearArgs& c, st
+         }
+     }
+     t.drawn = true;
++    t.cpu = false;
+ }
+ 
+ // ClearChannels' pipeline for the target format and channel mask, kept in blit_psos_; null when it can't be made
+@@ -3074,6 +3243,7 @@ void D3D12Backend::CopyByDraw(const Target& src_t, ID3D12Resource* src_res, D3D1
+         Blit(src_res, src_t.fmt, uv, o);
+     }
+     dst_t.drawn = true;
++    dst_t.cpu = false;
+     bound_rt_ = bound_ds_ = nullptr;
+ }
+ 
+@@ -3111,6 +3281,7 @@ void D3D12Backend::CopyByRegion(const Target& src_t, ID3D12Resource* src_res, D3
+         cl_->CopyTextureRegion(&dl, dx, dy, 0, &sl, &b);
+     }
+     dst_t.drawn = true;
++    dst_t.cpu = false;
+     bound_rt_ = bound_ds_ = nullptr;
+ }
+ 
+@@ -3275,6 +3446,7 @@ void D3D12Backend::ReleaseOldTextures() {
+     for (auto it = textures_.begin(); it != textures_.end();) {
+         if (it->second.frame + kIdleFrames < presents_) {
+             CurrentFrame().garbage.push_back(it->second.res);
++            if (it->second.repl) CurrentFrame().garbage.push_back(it->second.repl);
+             it = textures_.erase(it);
+         } else {
+             ++it;
+@@ -3291,6 +3463,7 @@ void D3D12Backend::ResetFrame() {
+     }
+     f.alloc->Reset();
+     f.garbage.clear();
++    repl_budget_ = 2;
+     f.used = 0;
+     f.srv = 0;
+     cl_->Reset(f.alloc.Get(), nullptr);
+@@ -3317,12 +3490,14 @@ void LogPerf() {
+         Perf& p = g_perf;
+         double n = double(perf_frames);
+         double host = p.draw + p.clear + p.copy + p.present + p.sync;
+-        LOGI("perf: %.1f fps %.2f ms/frame | host %.2f (draw %.2f: assemble %.2f bind %.2f [check %.2f, upload %.2f] "
+-             "compile %.2f; clear %.2f copy %.2f sync %.2f present %.2f [swap %.2f wait %.2f]) other %.2f",
++        // asked for with XBE_PERF, so written as a report: a release build keeps it, and it is in the file as
++        // the second ends
++        LOGR("perf: %.1f fps %.2f ms/frame | host %.2f (draw %.2f: assemble %.2f bind %.2f [check %.2f, upload %.2f] "
++             "compile %.2f pso %.2f; clear %.2f copy %.2f sync %.2f present %.2f [swap %.2f wait %.2f]) other %.2f",
+              n * 1000.0 / el, el / n, host / n, p.draw / n, p.assemble / n, p.bind / n, p.sig / n, p.texup / n,
+-             p.compile / n, p.clear / n, p.copy / n, p.sync / n, p.present / n, p.swap / n, p.wait / n,
++             p.compile / n, p.pso / n, p.clear / n, p.copy / n, p.sync / n, p.present / n, p.swap / n, p.wait / n,
+              (el - host) / n);
+-        LOGI("perf: title thread per frame: recording %.2f ms, waiting %.2f ms (%.1f waits: read-back %.2f "
++        LOGR("perf: title thread per frame: recording %.2f ms, waiting %.2f ms (%.1f waits: read-back %.2f "
+              "resource %.2f fence %.2f flush %.2f copy %.2f, next frame %.2f) | read-backs waited for: %.1f lock, "
+              "%.1f NOOVERWRITE",
+              g_perf_capture_ns.exchange(0) / n / 1e6, g_perf_wait_ns.exchange(0) / n / 1e6,
+@@ -3331,13 +3506,13 @@ void LogPerf() {
+              g_perf_wait_kind_ns[3].exchange(0) / n / 1e6, g_perf_wait_kind_ns[4].exchange(0) / n / 1e6,
+              g_perf_wait_kind_ns[5].exchange(0) / n / 1e6, g_perf_sync_block.exchange(0) / n,
+              g_perf_sync_late.exchange(0) / n);
+-        LOGI("perf: per frame %.0f draws (%.0f raw) %.0fk verts %.1f MB upload %.1f overflow | %.0f checks %.2f MB "
++        LOGR("perf: per frame %.0f draws (%.0f raw) %.0fk verts %.1f MB upload %.1f overflow | %.0f checks %.2f MB "
+              "hashed | %.1f tex uploads %.2f MB, %.1f new tex, %.1f new targets, %.1f target uploads, %.1f shrinks, "
+-             "%.1f read-backs %.1f late | %llu shaders %llu psos this second",
++             "%.1f read-backs %.1f late | %llu shaders compiled %llu kept %llu psos this second",
+              p.draws / n, p.raw / n, p.verts / n / 1000.0, p.upload / n / 1048576.0, p.overflow / n, p.sigs / n,
+              p.sig_bytes / n / 1048576.0, p.texups / n, p.texup_bytes / n / 1048576.0, p.newtex / n,
+              p.targets / n, p.rtups / n, p.shrinks / n, p.syncs / n, p.lates / n,
+-             (unsigned long long)p.shaders, (unsigned long long)p.psos);
++             (unsigned long long)p.shaders, (unsigned long long)p.shaders_kept, (unsigned long long)p.psos);
+         g_perf = Perf{};
+         perf_start = PerfClock::now();
+         perf_frames = 0;
+diff --git a/runtime/gpu/ext.h b/runtime/gpu/ext.h
+index ce6acda..2479f99 100644
+--- a/runtime/gpu/ext.h
++++ b/runtime/gpu/ext.h
+@@ -17,6 +17,7 @@
+ #include "gpu/shaders.h"
+ #include "gpu/state.h"
+ #include "gpu/texture.h"
++#include "gpu/vertex.h"
+ 
+ namespace gpu {
+ 
+@@ -30,6 +31,7 @@ struct Target {
+     uint32_t data = 0, bytes = 0;
+     uint64_t epoch = 0, sig = 0;  // last lock seen, guest memory as last matched
+     bool drawn = false;           // the GPU wrote it since the last readback
++    bool cpu = false;             // its picture is the CPU's: uploaded, no draw or copy into it since
+     std::vector<uint8_t> read;    // what Sync left in guest memory
+     Microsoft::WRL::ComPtr<ID3D12Resource> fb;  // copy read by draws that sample the target they render to
+     D3D12_RESOURCE_STATES fb_state = D3D12_RESOURCE_STATE_COPY_DEST;
+@@ -60,6 +62,12 @@ public:
+     virtual uint64_t Presents() const = 0;
+ };
+ 
++// a picture drawn instead of a guest texture: BGRA8 levels, the largest first, each half the one before
++struct Replacement {
++    uint32_t width = 0, height = 0;
++    std::vector<std::vector<uint8_t>> levels;
++};
++
+ class Extension {
+ public:
+     virtual ~Extension() = default;
+@@ -74,12 +82,18 @@ public:
+     virtual void MakeTarget(const Surface&, bool /*depth*/, uint32_t /*gw*/, uint32_t /*gh*/, float& /*scale*/, DXGI_FORMAT& /*fmt*/) {}
+     virtual void BeginDraw(const State&) {}
+     virtual void EndDraw() {}
++    // the draw's vertices as assembled, before its targets are bound
++    virtual void Vertices(const State&, const Assembled&) {}
+     // targets bound for a draw; true binds them again
+     virtual bool Bound(Context&, const State&, Target* /*rt*/, Target* /*ds*/, bool /*pretransformed*/) { return false; }
+     // stage samples surface data: key picks the copy, k its texels per render scale texel, box allows the spread taps
+     virtual void Sample(uint32_t /*data*/, bool /*depth*/, int /*stage*/, uint64_t& /*key*/, float& /*k*/, bool& /*box*/) {}
+     // bound: the target, or a texture with the flags Decoded gave it
+     virtual void Sampled(const TextureDesc&, const Target*, uint8_t /*flags*/, TexInfo&) {}
++    // a guest texture uploaded (palette the P8 colours or null): an id for its replacement, 0 for none
++    virtual uint64_t Replace(const TextureDesc&, const uint8_t* /*guest*/, const uint32_t* /*palette*/) { return 0; }
++    // a bound texture's replacement, asked until given: its pixels once ready, null while it loads
++    virtual std::shared_ptr<const Replacement> Replaced(uint64_t /*id*/) { return nullptr; }
+     // a texture level decoded for upload
+     virtual void Decoded(const TextureDesc&, const FormatInfo&, uint32_t /*face*/, uint32_t /*level*/, const std::vector<uint8_t>& /*px*/,
+                          uint32_t /*pitch*/, uint8_t& /*flags*/) {}
+diff --git a/runtime/gpu/shaders.cpp b/runtime/gpu/shaders.cpp
+index 6d263d6..ac3c53c 100644
+--- a/runtime/gpu/shaders.cpp
++++ b/runtime/gpu/shaders.cpp
+@@ -233,7 +233,7 @@ const char* kVsEpilogue = R"(
+     q.xyz *= p.w;
+     q.w = p.w;
+     o.pos = q;
+-    o.d0 = saturate(oD0);
++@POSITION@    o.d0 = saturate(oD0);
+     o.d1 = saturate(oD1);
+     o.b0 = saturate(oB0);
+     o.b1 = saturate(oB1);
+@@ -246,6 +246,16 @@ const char* kVsEpilogue = R"(
+ }
+ )";
+ 
++// the epilogue's @POSITION@ mark, before the line it starts: ShaderHooks::Position
++std::string WithPosition(std::string s) {
++    constexpr std::string_view kMark = "@POSITION@";
++    size_t at = s.find(kMark);
++    if (at != std::string::npos) s.replace(at, kMark.size(), Hooks().Position());
++    return s;
++}
++
++std::string VsEpilogue() { return WithPosition(kVsEpilogue); }
++
+ const char* kVsPrologue = R"(
+     int a0 = 0;
+     // precise: EQUAL depth passes need bit exact positions
+@@ -667,6 +677,16 @@ PixelKey MakePixelKey(const State& s, const TexInfo tex[4]) {
+         const auto& t = s.tss[size_t(i)];
+         uint32_t v[9] = {t[kTssColorOp], t[kTssColorArg1], t[kTssColorArg2], t[kTssColorArg0], t[kTssAlphaOp],
+                          t[kTssAlphaArg1],  t[kTssAlphaArg2], t[kTssAlphaArg0], t[kTssResultArg]};
++        // A later stage with no texture that still reads D3DTA_TEXTURE ends the cascade: XDK D3D builds that
++        // stage's combiner as current * 1, a pass through. Taking the missing texture as white instead let a
++        // MODULATE(TEXTURE, DIFFUSE) left over from a multitexture draw replace the colour with the diffuse.
++        // (Castlevania: Curse of Darkness draws its single texture quads so.) ff[i] stays 0, which ends it.
++        auto reads_texture = [&](int first, int n) {
++            for (int a = first; a < first + n; a++)
++                if ((v[a] & 0xF) == 2) return true;  // D3DTA_TEXTURE, modifiers in the high bits
++            return false;
++        };
++        if (i > 0 && !tex[i].kind && t[kTssColorOp] > 1 && (reads_texture(1, 3) || reads_texture(5, 3))) break;
+         std::memcpy(k.ff[i], v, sizeof(v));
+         if (!tex[i].kind) PassMissingTexture(k.ff[i]);
+         if (program || (t[kTssTextureTransformFlags] & 0x100)) k.proj |= 1u << i;  // D3DTTFF_PROJECTED
+@@ -678,17 +698,19 @@ PixelKey MakePixelKey(const State& s, const TexInfo tex[4]) {
+ constexpr uint32_t kMuxConstant = 3;
+ constexpr uint32_t kViewportOffsetConstant = 59;  // c-37: constants start at c-96
+ 
+-bool ReadsViewportOffset(const std::vector<uint32_t>& prog) {
++bool ReadsConstant(const std::vector<uint32_t>& prog, uint32_t reg) {
+     for (size_t n = 0; n + 4 <= prog.size(); n += 4) {
+         Tok k{&prog[n]};
+         // an instruction reads at most one constant, through any of its operands
+         bool constant = k.f(2, 26, 2) == kMuxConstant || k.f(2, 11, 2) == kMuxConstant || k.f(3, 28, 2) == kMuxConstant;
+         bool relative = k.f(3, 1, 1);
+-        if (constant && !relative && k.f(1, 13, 8) == kViewportOffsetConstant) return true;
++        if (constant && !relative && k.f(1, 13, 8) == reg) return true;
+     }
+     return false;
+ }
+ 
++bool ReadsViewportOffset(const std::vector<uint32_t>& prog) { return ReadsConstant(prog, kViewportOffsetConstant); }
++
+ std::string VertexProgramHlsl(const std::vector<uint32_t>& prog, uint16_t regs, uint64_t decode) {
+     std::string s = Common();
+     s += kVsHelpers;
+@@ -727,7 +749,7 @@ std::string VertexProgramHlsl(const std::vector<uint32_t>& prog, uint16_t regs,
+         }
+         if (k.f(3, 0, 1)) break;  // last instruction
+     }
+-    s += kVsEpilogue;
++    s += VsEpilogue();
+     return s;
+ }
+ 
+@@ -840,7 +862,7 @@ std::string FixedVertexHlsl(uint16_t regs, bool pretransformed, uint64_t decode,
+         s += "    }\n";
+     }
+     s += "    oFog = " + v(5, "float4(0,0,0,0)") + ";\n";
+-    if (pretransformed) return s + kVsEpilogue;
++    if (pretransformed) return s + VsEpilogue();
+     s += R"(
+     VOut o;
+     // like the pretransformed ones, target sized passes end half a console pixel short of the far edges
+@@ -848,7 +870,7 @@ std::string FixedVertexHlsl(uint16_t regs, bool pretransformed, uint64_t decode,
+     if (surf.w == 0 && abs(sp.x - (surf.x - 0.5)) < 1e-3) cp.x = cp.w;
+     if (surf.w == 0 && abs(sp.y - (surf.y - 0.5)) < 1e-3) cp.y = -cp.w;
+     o.pos = cp;
+-    o.d0 = saturate(oD0);
++@POSITION@    o.d0 = saturate(oD0);
+     o.d1 = saturate(oD1);
+     o.b0 = o.d0;
+     o.b1 = o.d1;
+@@ -860,7 +882,7 @@ std::string FixedVertexHlsl(uint16_t regs, bool pretransformed, uint64_t decode,
+     return o;
+ }
+ )";
+-    return s;
++    return WithPosition(s);
+ }
+ 
+ std::string PixelHlsl(const PixelKey& k) {
+diff --git a/runtime/gpu/shaders.h b/runtime/gpu/shaders.h
+index 08d9bff..1195a1f 100644
+--- a/runtime/gpu/shaders.h
++++ b/runtime/gpu/shaders.h
+@@ -46,6 +46,8 @@ PixelKey MakePixelKey(const State& s, const TexInfo tex[4]);
+ std::string VertexProgramHlsl(const std::vector<uint32_t>& program, uint16_t regs, uint64_t decode = 0);
+ // the program reads c-37, the viewport offset that carries the XDK's half pixel screen space offset
+ bool ReadsViewportOffset(const std::vector<uint32_t>& program);
++// the program reads constant reg (hardware order: D3D register + 96) other than through a0
++bool ReadsConstant(const std::vector<uint32_t>& program, uint32_t reg);
+ // fixed function vertex state a shader is built for
+ struct FixedKey {
+     uint32_t light = 0;    // bit 0 lighting, 1 specular, 2 local viewer, 3 normalize, then D3DMCS 2 bits each from bit 8:
+@@ -78,6 +80,8 @@ struct ShaderHooks {
+     virtual std::string Fetched(const TexInfo&, int) const { return {}; }
+     // outc to the target, after the alpha test
+     virtual std::string Output() const;
++    // o.pos once set, in clip space, by programs and fixed function alike
++    virtual std::string Position() const { return {}; }
+ };
+ inline const ShaderHooks* g_shader_hooks = nullptr;
+ inline bool g_reversed_depth = false;  // the renderer stores depth reversed: shadow compares turn r with it
+diff --git a/runtime/gpu/state.h b/runtime/gpu/state.h
+index 2a57947..33a7c30 100644
+--- a/runtime/gpu/state.h
++++ b/runtime/gpu/state.h
+@@ -185,6 +185,9 @@ struct State {
+     uint32_t light_enable = 0;                         // bit per light
+     float ss_offset_x = 0, ss_offset_y = 0;
+     float zscale = 16777215.0f;  // depth buffer units per 1.0
++    // rt is the device's back buffer: D3DRS_MULTISAMPLEMODE applies to it, MULTISAMPLERENDERTARGETMODE to other targets.
++    // Known where the target is set: the render thread's rt header is a copy
++    bool rt_back_buffer = true;
+ };
+ 
+ }  // namespace gpu
+diff --git a/runtime/gpu/texture.cpp b/runtime/gpu/texture.cpp
+index c778ba0..5ea37dd 100644
+--- a/runtime/gpu/texture.cpp
++++ b/runtime/gpu/texture.cpp
+@@ -399,6 +399,18 @@ void DecodeLevel(const TextureDesc& d, uint32_t level, uint32_t face, const uint
+             }
+ }
+ 
++bool PaletteIndices(const TextureDesc& d, const uint8_t* guest, std::vector<uint8_t>& out) {
++    if (d.format != 0x0B || d.linear || d.cube || d.depth != 1) return false;
++    uint32_t mx, my, mz;
++    SwizzleMasks(d.width, d.height, 1, mx, my, mz);
++    out.resize(size_t(d.width) * d.height);
++    for (uint32_t y = 0; y < d.height; y++) {
++        uint32_t row = Deposit(y, my);
++        for (uint32_t x = 0; x < d.width; x++) out[size_t(y) * d.width + x] = guest[row | Deposit(x, mx)];
++    }
++    return true;
++}
++
+ uint32_t LinearColorFormat(uint32_t f) {
+     switch (f) {
+         case 0x06: return 0x12;
+diff --git a/runtime/gpu/texture.h b/runtime/gpu/texture.h
+index 6adb65a..d1dcd43 100644
+--- a/runtime/gpu/texture.h
++++ b/runtime/gpu/texture.h
+@@ -41,6 +41,8 @@ uint32_t TotalSize(const TextureDesc& d);
+ void DecodeLevel(const TextureDesc& d, uint32_t level, uint32_t face, const uint8_t* guest, const uint32_t* palette,
+                  std::vector<uint8_t>& out, uint32_t& row_pitch);
+ 
++// a swizzled 2D P8 texture's top level as palette indices, row by row; false for any other texture
++bool PaletteIndices(const TextureDesc& d, const uint8_t* guest, std::vector<uint8_t>& out);
+ uint32_t LinearColorFormat(uint32_t fmt);
+ uint32_t LinearDepthFormat(uint32_t fmt);
+ void SurfaceSize(const Surface& s, uint32_t& w, uint32_t& h);
+diff --git a/runtime/kernel/disc.cpp b/runtime/kernel/disc.cpp
+index 6ee0fa3..e128ff1 100644
+--- a/runtime/kernel/disc.cpp
++++ b/runtime/kernel/disc.cpp
+@@ -22,8 +22,9 @@ namespace kernel {
+ namespace {
+ 
+ constexpr uint32_t kSector = 2048;
+-// the game partition: at the start of an xiso, past the video partition of a whole original Xbox disc dump
+-constexpr uint64_t kPartitions[] = {0, 0x18300000};
++// the game partition: at the start of an xiso, else past the video partition of a whole disc dump, which ends by
++// the disc's kind: XGD1 (the early titles) or XGD2 (the later ones, with a smaller video partition)
++constexpr uint64_t kPartitions[] = {0, 0x18300000, 0xFD90000};
+ // volume descriptor, sector 32 of the partition: magic, root table sector and size, FILETIME, magic again at +0x7EC
+ constexpr uint32_t kVolume = 32 * kSector;
+ constexpr char kMagic[] = "MICROSOFT*XBOX*MEDIA";
+diff --git a/runtime/kernel/xboxkrnl.cpp b/runtime/kernel/xboxkrnl.cpp
+index bec6e36..088429d 100644
+--- a/runtime/kernel/xboxkrnl.cpp
++++ b/runtime/kernel/xboxkrnl.cpp
+@@ -1224,12 +1224,14 @@ KERNEL_EXPORT(29, ExSaveNonVolatileSetting, 4) {
+ 
+ // widescreen (a 4:3 output plays the console's 4:3), 480p
+ static uint32_t VideoFlags() { return (app::Widescreen() ? 0x00010000 : 0) | 0x00080000; }
++// the dashboard's language, as the game says (GameInfo::language)
++static uint32_t Language() { return app::kGame.language ? app::kGame.language() : 1; }
+ 
+ KERNEL_EXPORT(24, ExQueryNonVolatileSetting, 5) {
+     uint32_t index = a[0], type_out = a[1], value = a[2], len = a[3], result_len = a[4];
+     uint32_t v = 0;
+     switch (index) {
+-        case 7: v = 1; break;                      // XC_LANGUAGE english
++        case 7: v = Language(); break;             // XC_LANGUAGE
+         case 8: v = VideoFlags(); break;          // XC_VIDEO_FLAGS
+         case 9: v = 0; break;                      // XC_AUDIO_FLAGS stereo
+         case 0x103: v = 0x00400100; break;         // XC_FACTORY_AV_REGION NTSC-M
+@@ -1242,7 +1244,7 @@ KERNEL_EXPORT(24, ExQueryNonVolatileSetting, 5) {
+         // the whole EEPROM image: user settings live at 0xC0 onwards
+         if (type_out) W32(type_out, 3);  // REG_BINARY
+         if (value && len >= 0x100) {
+-            W32(value + 0xE8, 1);                     // language
++            W32(value + 0xE8, Language());            // language
+             W32(value + 0xEC, VideoFlags());          // video flags
+             W32(value + 0xF0, 0);                     // audio flags, stereo
+             W32(value + 0x58, 0x00400100);            // factory video standard
+diff --git a/runtime/xdk/d3d8.cpp b/runtime/xdk/d3d8.cpp
+index 975e977..71805c3 100644
+--- a/runtime/xdk/d3d8.cpp
++++ b/runtime/xdk/d3d8.cpp
+@@ -81,6 +81,10 @@ bool InCode(uint32_t va);  // cpu/dispatch.cpp
+ #define SYM_D3D_BlockOnNonSurfaceResource FFFFFE0A
+ #define HAS_D3D_BlockOnNonSurfaceResource 0
+ #endif
++#ifndef SYM_D3DDevice_DrawIndexedVerticesUP
++#define SYM_D3DDevice_DrawIndexedVerticesUP FFFFFE0B
++#define HAS_D3DDevice_DrawIndexedVerticesUP 0
++#endif
+ 
+ namespace d3d {
+ 
+@@ -306,6 +310,7 @@ void SetFrameBuffers(const char* caller, uint32_t pp) {
+         std::memcpy(HostPtr(kDevice + XDK_CDevice_BackBufferScale + 4), &one, 4);
+     }
+     g_state.rt = SurfaceOf(g_buffers[1]);
++    g_state.rt_back_buffer = true;
+     g_state.zs = SurfaceOf(g_depth);
+     UpdateViewportConstants();
+ }
+@@ -554,6 +559,7 @@ void ApplyRenderTarget(X86Context& ctx, uint32_t rt, uint32_t zs) {
+     Release(ctx, old_rt);
+     Release(ctx, old_zs);
+     g_state.rt = SurfaceOf(rt);
++    g_state.rt_back_buffer = rt == g_buffers[1];  // the buffers swap their memory, not their headers
+     g_state.zs = SurfaceOf(zs);
+ }
+ }  // namespace
+@@ -600,6 +606,8 @@ namespace {
+ std::atomic<uint32_t> g_presents{0};
+ }  // namespace
+ 
++uint32_t d3d::Swaps() { return g_presents; }
++
+ HLE_STDCALL(D3DDevice_Swap, 1) {
+     app::SplashFirstFrame();
+     // handed over from the previous instance: the window opens on the second frame, the first picture with
+@@ -635,6 +643,7 @@ HLE_STDCALL(D3DDevice_Swap, 1) {
+     W32(g_buffers[0] + 4, data);
+     W32(g_buffers[0] + 8, lk);
+     g_state.rt = SurfaceOf(Dev(kDevRenderTarget));
++    g_state.rt_back_buffer = Dev(kDevRenderTarget) == g_buffers[1];
+     uint32_t n = Dev(kDevSwapCount) + 1;
+     SetDev(kDevSwapCount, n);
+     return n;
+@@ -1398,6 +1407,23 @@ HLE_STDCALL(D3DDevice_DrawVerticesUP, 4) {
+     return 0;
+ }
+ 
++// (primitive, index count, 16 bit indices, vertices, stride), both in the title's memory: the vertices up to the
++// highest index are copied out like DrawVerticesUP's
++HLE_STDCALL(D3DDevice_DrawIndexedVerticesUP, 5) {
++    std::lock_guard<std::recursive_mutex> lock(g_lock);
++    Walk(Dev(kDevPush));
++    if (!g_backend || !a[1] || !a[2] || !a[3] || !a[4]) return 0;
++    SyncDeferred();
++    const uint16_t* idx = static_cast<const uint16_t*>(HostPtr(a[2]));
++    uint32_t top = 0;
++    for (uint32_t i = 0; i < a[1]; i++) top = std::max<uint32_t>(top, idx[i]);
++    auto stream = g_state.streams[0];
++    g_state.streams[0] = {UpVertices(HostPtr(a[3]), (top + 1) * a[4]), a[4]};
++    g_backend->Draw(g_state, a[0], 0, a[1], reinterpret_cast<const uint8_t*>(idx));
++    g_state.streams[0] = stream;
++    return 0;
++}
++
+ // BeginPush(dwords) hands out room for raw hardware commands, EndPush(end) runs what the title wrote there:
+ // a primitive between two begin/end writes with its vertices inline or as vertex data, other methods as simple states.
+ HLE_STDCALL(D3DDevice_BeginPush, 1) {
+diff --git a/runtime/xdk/d3d8.h b/runtime/xdk/d3d8.h
+index 977d028..e1c4069 100644
+--- a/runtime/xdk/d3d8.h
++++ b/runtime/xdk/d3d8.h
+@@ -7,5 +7,6 @@ namespace d3d {
+ 
+ gpu::State& State();
+ std::recursive_mutex& Lock();
++uint32_t Swaps();  // frames the title has presented: its D3DDevice_Swap calls
+ 
+ }  // namespace d3d
+diff --git a/runtime/xdk/dsound.cpp b/runtime/xdk/dsound.cpp
+index b322778..105d14f 100644
+--- a/runtime/xdk/dsound.cpp
++++ b/runtime/xdk/dsound.cpp
+@@ -85,6 +85,23 @@ X86Func* Find(uint32_t guest);
+ #define SYM_IDirectSoundBuffer_SetEG FFFFFF0E
+ #define HAS_IDirectSoundBuffer_SetEG 0
+ #endif
++// no signature yet; a config names them by hand from the .XTLID ids (Castlevania: Curse of Darkness)
++#ifndef SYM_IDirectSoundBuffer_SetPitch
++#define SYM_IDirectSoundBuffer_SetPitch FFFFFF0F
++#define HAS_IDirectSoundBuffer_SetPitch 0
++#endif
++#ifndef SYM_IDirectSoundBuffer_PlayEx
++#define SYM_IDirectSoundBuffer_PlayEx FFFFFF10
++#define HAS_IDirectSoundBuffer_PlayEx 0
++#endif
++#ifndef SYM_IDirectSoundBuffer_SetDopplerFactor
++#define SYM_IDirectSoundBuffer_SetDopplerFactor FFFFFF11
++#define HAS_IDirectSoundBuffer_SetDopplerFactor 0
++#endif
++#ifndef SYM_IDirectSoundBuffer_SetRolloffFactor
++#define SYM_IDirectSoundBuffer_SetRolloffFactor FFFFFF12
++#define HAS_IDirectSoundBuffer_SetRolloffFactor 0
++#endif
+ 
+ namespace {
+ 
+@@ -740,6 +757,8 @@ static void AuditExports() {
+         SYM(IDirectSound_GetOutputLevels), SYM(IDirectSoundBuffer_SetPlayRegion), SYM(IDirectSoundBuffer_SetAllParameters),
+         SYM(IDirectSoundBuffer_SetFormat), SYM(IDirectSoundBuffer_SetOutputBuffer), SYM(IDirectSoundBuffer_SetRolloffCurve),
+         SYM(IDirectSoundBuffer_StopEx), SYM(IDirectSoundBuffer_Pause), SYM(IDirectSoundBuffer_SetEG),
++        SYM(IDirectSoundBuffer_SetPitch), SYM(IDirectSoundBuffer_PlayEx), SYM(IDirectSoundBuffer_SetDopplerFactor),
++        SYM(IDirectSoundBuffer_SetRolloffFactor),
+         SYM(XAudioDownloadEffectsImage), SYM(DirectSoundCreateBuffer), SYM(IDirectSound_CreateSoundBuffer),
+         SYM(IDirectSoundBuffer_Release), SYM(IDirectSoundBuffer_Unlock), SYM(IDirectSoundBuffer_SetBufferData),
+         SYM(IDirectSoundBuffer_Play), SYM(IDirectSoundBuffer_Stop), SYM(IDirectSoundBuffer_SetLoopRegion),
+@@ -1044,6 +1063,23 @@ BUFFER(SetFrequency, 2) {
+     v.freq = a[1];
+     return 0;
+ }
++// (this, pitch): pitch is 4096 * log2(frequency / 48000)
++BUFFER(SetPitch, 2) {
++    v.freq = uint32_t(48000.0 * std::exp2(int32_t(a[1]) / 4096.0) + 0.5);
++    return 0;
++}
++// (this, time low, time high, flags): starts now, the timestamp is not honoured
++BUFFER(PlayEx, 4) {
++    v.has_gain = false;  // as Play
++    v.playing = true;
++    v.paused = false;
++    v.looping = a[3] & 1;
++    if (a[3] & 2) v.pos = 0;
++    v.sync = a[3] & 4;
++    return 0;
++}
++BUFFER(SetDopplerFactor, 3) { return 0; }
++BUFFER(SetRolloffFactor, 3) { return 0; }
+ BUFFER(SetFilter, 2) { return 0; }
+ BUFFER(SetHeadroom, 2) {
+     v.headroom = Db(-int32_t(a[1]));

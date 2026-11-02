@@ -7,6 +7,14 @@
 
 void xbox_FramebufferWindowStart(void);
 ptrdiff_t xbox_GetMemoryOffset(void) { return 0; }
+/* This test has no guest layout; the frame-source range check itself is
+ * exercised by guest_window_test. */
+int xbox_GuestMemoryContains(uint32_t guest_va, uint64_t bytes)
+{
+    (void)guest_va;
+    (void)bytes;
+    return 1;
+}
 static DWORD child_pid;
 static HWND child_window;
 static BOOL CALLBACK find_window(HWND window, LPARAM unused)

@@ -1,11 +1,16 @@
 /* Host-side platform shim for the OpenCE D3D8/OpenGL layer. */
 #include "platform.h"
+#include "presentation_geometry.h"
 
 #include <SDL3/SDL.h>
 #include "gl.h"
 #include <stdarg.h>
+#if defined(_M_X64) || defined(__x86_64__)
+#include <emmintrin.h>
+#endif
 
 int gl_functions_load(void);
+float noble_wide_window_aspect(void);
 
 /* Windows kernel entry points (avoid including windows.h next to the XDK). */
 __declspec(dllimport) void *__stdcall VirtualAlloc(void *address, size_t size,
@@ -13,6 +18,7 @@ __declspec(dllimport) void *__stdcall VirtualAlloc(void *address, size_t size,
                                                   unsigned long protect);
 __declspec(dllimport) int __stdcall VirtualFree(void *address, size_t size,
                                                 unsigned long type);
+__declspec(dllimport) int __stdcall IsBadReadPtr(const void *address, size_t size);
 
 #define MEM_RESERVE 0x2000UL
 #define MEM_COMMIT 0x1000UL
@@ -129,10 +135,20 @@ void *noble_low_realloc(void *pointer, size_t size)
 /* ---------- logging ---------- */
 void platform_log(const char *format, ...)
 {
+    static FILE *probe_log;
+    static int probe_checked;
+    FILE *stream = stderr;
     va_list arguments;
+    if (!probe_checked) {
+        const char *path = getenv("RECOMP_WIDE_LOG");
+        probe_checked = 1;
+        if (path && *path) probe_log = fopen(path, "w");
+    }
+    if (probe_log) stream = probe_log;
     va_start(arguments, format);
-    vfprintf(stderr, format, arguments);
-    fputc('\n', stderr);
+    vfprintf(stream, format, arguments);
+    fputc('\n', stream);
+    if (probe_log) fflush(stream);
     va_end(arguments);
 }
 
@@ -185,6 +201,92 @@ BOOL platform_is_contiguous(const void *address)
     return (value >= 0x80000000u && value < 0xA0000000u) ? TRUE : FALSE;
 }
 
+BOOL platform_range_mapped(const void *address, size_t size)
+{
+    if (!address || !size)
+        return FALSE;
+    return IsBadReadPtr(address, size) ? FALSE : TRUE;
+}
+
+/* Experimental exact equality retained for the archived SSE2 tests and
+ * benchmark. Production memory_watch_generation uses memcmp as before; this
+ * helper is not called by production. It only answers "all bytes equal" and
+ * does not need the ordering of the first difference. SSE2 is baseline on
+ * x86-64. Every byte is still inspected on equality: the vector stages cover
+ * only whole blocks, and the scalar tail is exact. */
+#if defined(_M_X64) || defined(__x86_64__)
+#if defined(__clang__) || defined(__GNUC__)
+#define CONTENT_M128_UNALIGNED __m128i_u
+#else
+#define CONTENT_M128_UNALIGNED __m128i
+#endif
+static int content_bytes_equal_sse2(const void *left, const void *right,
+                                    size_t size)
+{
+    const unsigned char *a = (const unsigned char *)left;
+    const unsigned char *b = (const unsigned char *)right;
+    const __m128i zero = _mm_setzero_si128();
+    size_t i = 0;
+
+#define CONTENT_LOAD_DIFF(offset) \
+    _mm_xor_si128( \
+        _mm_loadu_si128((const CONTENT_M128_UNALIGNED *)(const void *)(a + i + (offset))), \
+        _mm_loadu_si128((const CONTENT_M128_UNALIGNED *)(const void *)(b + i + (offset))))
+
+    while (size - i >= 128) {
+        __m128i d0 = CONTENT_LOAD_DIFF(0);
+        __m128i d1 = CONTENT_LOAD_DIFF(16);
+        __m128i d2 = CONTENT_LOAD_DIFF(32);
+        __m128i d3 = CONTENT_LOAD_DIFF(48);
+        __m128i d4 = CONTENT_LOAD_DIFF(64);
+        __m128i d5 = CONTENT_LOAD_DIFF(80);
+        __m128i d6 = CONTENT_LOAD_DIFF(96);
+        __m128i d7 = CONTENT_LOAD_DIFF(112);
+        __m128i d = _mm_or_si128(
+            _mm_or_si128(_mm_or_si128(d0, d1), _mm_or_si128(d2, d3)),
+            _mm_or_si128(_mm_or_si128(d4, d5), _mm_or_si128(d6, d7)));
+        if (_mm_movemask_epi8(_mm_cmpeq_epi8(d, zero)) != 0xFFFF)
+            return 0;
+        i += 128;
+    }
+    while (size - i >= 16) {
+        __m128i d = CONTENT_LOAD_DIFF(0);
+        if (_mm_movemask_epi8(_mm_cmpeq_epi8(d, zero)) != 0xFFFF)
+            return 0;
+        i += 16;
+    }
+#undef CONTENT_LOAD_DIFF
+
+    while (i < size) {
+        if (a[i] != b[i])
+            return 0;
+        i++;
+    }
+    return 1;
+}
+#undef CONTENT_M128_UNALIGNED
+#endif
+
+static int content_bytes_equal(const void *left, const void *right, size_t size)
+{
+#if defined(_M_X64) || defined(__x86_64__)
+    return content_bytes_equal_sse2(left, right, size);
+#else
+    return memcmp(left, right, size) == 0;
+#endif
+}
+
+/* Test seam: mode 0 is the experimental SSE2 equality path; mode 1 is the
+ * CRT reference. Production memory_watch_generation uses memcmp and does not
+ * call this seam. */
+int noble_d3d8_content_equal_test(const void *left, const void *right,
+                                  size_t size, int mode)
+{
+    if (mode == 1)
+        return memcmp(left, right, size) == 0;
+    return content_bytes_equal(left, right, size);
+}
+
 /* ---------- exact memory content generations
  * The recomp writes guest memory directly, so OpenCE's page fault watcher
  * cannot see those stores. Compare a snapshot before reusing an upload.
@@ -209,10 +311,28 @@ static void content_watch_drop(unsigned slot)
     }
     memset(&content_watch[slot], 0, sizeof(content_watch[slot]));
 }
-void memory_watch_initialize(void) {}
-void memory_watch_protect(unsigned long address, unsigned long size) { (void)address; (void)size; }
+int page_watch_enabled(void);
+void page_watch_initialize(void);
+void page_watch_protect(unsigned long address, unsigned long size);
+unsigned long page_watch_generation(unsigned long address, unsigned long size);
+unsigned long page_watch_serial(void);
+void page_watch_prepare_write(void *address, unsigned long size);
+void page_watch_forget(void *address, unsigned long size);
+
+void memory_watch_initialize(void)
+{
+    if (page_watch_enabled())
+        page_watch_initialize();
+}
+void memory_watch_protect(unsigned long address, unsigned long size)
+{
+    if (page_watch_enabled())
+        page_watch_protect(address, size);
+}
 unsigned long memory_watch_generation(unsigned long address, unsigned long size)
 {
+    if (page_watch_enabled())
+        return page_watch_generation(address, size);
     const void *data = (const void *)(uintptr_t)address;
     unsigned slot = ((address >> 4) ^ size) % CONTENT_WATCH_SLOTS;
     size_t allocated;
@@ -241,11 +361,24 @@ unsigned long memory_watch_generation(unsigned long address, unsigned long size)
     return content_watch[slot].generation;
 }
 /* Every lookup must inspect the bytes; writes can occur between draws. */
-unsigned long memory_watch_serial(void) { return ++content_lookup; }
-void memory_watch_prepare_write(void *address, unsigned long size) { (void)address; (void)size; }
+unsigned long memory_watch_serial(void)
+{
+    if (page_watch_enabled())
+        return page_watch_serial();
+    return ++content_lookup;
+}
+void memory_watch_prepare_write(void *address, unsigned long size)
+{
+    if (page_watch_enabled())
+        page_watch_prepare_write(address, size);
+}
 void memory_watch_forget(void *address, unsigned long size)
 {
     unsigned slot;
+    if (page_watch_enabled()) {
+        page_watch_forget(address, size);
+        return;
+    }
     uintptr_t first = (uintptr_t)address, last = first + size;
     for (slot = 0; slot < CONTENT_WATCH_SLOTS; slot++) {
         uintptr_t begin = content_watch[slot].address;
@@ -258,6 +391,10 @@ void memory_watch_begin_frame(void) {}
 /* ---------- settings ---------- */
 const char *config_string(const char *name)
 {
+    if (!strcmp(name, "debug.screenshot_directory")) {
+        const char *value = getenv("RECOMP_WIDE_CAPTURE_DIR");
+        return value ? value : "";
+    }
     if (!strcmp(name, "debug.texture_dump_directory")) {
         const char *value=getenv("RECOMP_D3D8GL_DUMP_TEXTURES");
         return value?value:"";
@@ -308,9 +445,17 @@ int noble_d3d8_trace_enabled(void)
 /* ---------- window / OpenGL ---------- */
 static SDL_Window *g_window;
 static SDL_GLContext g_context;
+static void (*g_host_input_pump)(void);
+
+__declspec(dllexport) void noble_d3d8_set_input_pump(void (*pump)(void))
+{
+    g_host_input_pump = pump;
+}
 
 BOOL platform_video_initialize(unsigned long width, unsigned long height)
 {
+    int window_width = (int)width;
+    int window_height = (int)height;
     if (g_window)
         return TRUE;
     if (!SDL_Init(SDL_INIT_VIDEO)) {
@@ -321,8 +466,19 @@ BOOL platform_video_initialize(unsigned long width, unsigned long height)
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 5);
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE);
     SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
-    g_window = SDL_CreateWindow("Castlevania CoD | D3D8GL", (int)width, (int)height,
-                                SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE);
+    if (width == 640 && height == 480 && noble_wide_window_aspect() > 4.0f / 3.0f) {
+        const char *setting = getenv("RECOMP_WIDE_WINDOW_HEIGHT");
+        if (setting && *setting) {
+            char *end;
+            long parsed = strtol(setting, &end, 10);
+            if (end != setting && !*end && parsed >= 360 && parsed <= 2160)
+                window_height = (int)parsed;
+        }
+        window_width = noble_wide_window_width((int)width, window_height, noble_wide_window_aspect());
+    }
+    g_window = SDL_CreateWindow("Castlevania CoD | D3D8GL", window_width, window_height,
+                                SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE |
+                                (getenv("RECOMP_WIDE_PROBE") ? SDL_WINDOW_HIDDEN : 0));
     if (!g_window) {
         platform_log("D3D8GL: SDL_CreateWindow failed: %s", SDL_GetError());
         return FALSE;
@@ -391,6 +547,10 @@ BOOL platform_video_hdr(float *sdr_white, float *headroom)
 void platform_pump_events(void)
 {
     SDL_Event event;
+    if (g_host_input_pump) {
+        g_host_input_pump();
+        return;
+    }
     while (SDL_PollEvent(&event)) {
         if (event.type == SDL_EVENT_QUIT)
             exit(0);

@@ -1,0 +1,195 @@
+diff --git a/src/input/xinput_device.c b/src/input/xinput_device.c
+index 5975014..3a9cece 100644
+--- a/src/input/xinput_device.c
++++ b/src/input/xinput_device.c
+@@ -16,6 +16,43 @@
+ #include <stdlib.h>
+ #include <string.h>
+ 
++static int provider_active(void);
++
++/* Tables are immutable and outlive in-flight readers (normally static const).
++ * Publish one pointer atomically so shutdown cannot tear callback fields. */
++#if defined(_WIN32)
++static const XBOX_INPUT_PROVIDER *volatile g_provider;
++void xbox_InputSetProvider(const XBOX_INPUT_PROVIDER *provider)
++{
++    if (provider && !provider_active()) provider = NULL;
++    InterlockedExchangePointer((PVOID volatile *)&g_provider, (PVOID)provider);
++}
++static const XBOX_INPUT_PROVIDER *input_provider(void)
++{
++    return (const XBOX_INPUT_PROVIDER *)InterlockedCompareExchangePointer(
++        (PVOID volatile *)&g_provider, NULL, NULL);
++}
++#else
++#include <stdatomic.h>
++static _Atomic(const XBOX_INPUT_PROVIDER *) g_provider;
++void xbox_InputSetProvider(const XBOX_INPUT_PROVIDER *provider)
++{
++    if (provider && !provider_active()) provider = NULL;
++    atomic_store_explicit(&g_provider, provider, memory_order_release);
++}
++static const XBOX_INPUT_PROVIDER *input_provider(void)
++{
++    return atomic_load_explicit(&g_provider, memory_order_acquire);
++}
++#endif
++static int provider_active(void)
++{
++    const char *script = getenv("RECOMP_PAD_SCRIPT");
++    const char *live = getenv("RECOMP_PAD_LIVE");
++    const char *modern = getenv("RECOMP_MODERN_INPUT");
++    return !(script && *script) && !(live && *live) &&
++           !(modern && !strcmp(modern, "0"));
++}
+ /* Merge the keyboard on top of a pad on port 0 rather than only standing in
+  * for a missing one.
+  *
+@@ -64,6 +101,8 @@ static DWORD g_last_packet[XBOX_MAX_CONTROLLERS] = { 0 };
+ 
+ void xbox_InputInit(void)
+ {
++    const XBOX_INPUT_PROVIDER *provider = input_provider();
++    if (provider && provider->read && provider->connected && provider->capabilities && provider->rumble) return;
+     for (DWORD i = 0; i < XBOX_MAX_CONTROLLERS; i++) {
+         XINPUT_STATE state;
+         DWORD result = XInputGetState(i, &state);
+@@ -73,6 +112,8 @@ void xbox_InputInit(void)
+ 
+ DWORD xbox_InputGetState(DWORD dwPort, XBOX_INPUT_STATE *pState)
+ {
++    const XBOX_INPUT_PROVIDER *provider = input_provider();
++    if (provider && provider->read) return provider->read(dwPort, pState);
+     XINPUT_STATE xi_state;
+     DWORD result;
+ 
+@@ -136,6 +177,8 @@ DWORD xbox_InputGetState(DWORD dwPort, XBOX_INPUT_STATE *pState)
+ 
+ DWORD xbox_InputSetState(DWORD dwPort, const XBOX_VIBRATION *pVibration)
+ {
++    const XBOX_INPUT_PROVIDER *provider = input_provider();
++    if (provider && provider->rumble) return provider->rumble(dwPort, pVibration);
+     XINPUT_VIBRATION xi_vib;
+ 
+     if (dwPort >= XBOX_MAX_CONTROLLERS || !pVibration)
+@@ -148,12 +191,16 @@ DWORD xbox_InputSetState(DWORD dwPort, const XBOX_VIBRATION *pVibration)
+ 
+ BOOL xbox_InputIsConnected(DWORD dwPort)
+ {
++    const XBOX_INPUT_PROVIDER *provider = input_provider();
++    if (provider && provider->connected) return provider->connected(dwPort);
+     if (dwPort >= XBOX_MAX_CONTROLLERS) return FALSE;
+     return g_controller_connected[dwPort];
+ }
+ 
+ DWORD xbox_InputGetCapabilities(DWORD dwPort, DWORD dwFlags, XBOX_INPUT_CAPABILITIES *pCaps)
+ {
++    const XBOX_INPUT_PROVIDER *provider = input_provider();
++    if (provider && provider->capabilities) return provider->capabilities(dwPort, dwFlags, pCaps);
+     XINPUT_CAPABILITIES xi_caps;
+     DWORD result;
+ 
+@@ -218,6 +265,8 @@ static void open_controllers(void)
+ 
+ void xbox_InputInit(void)
+ {
++    const XBOX_INPUT_PROVIDER *provider = input_provider();
++    if (provider && provider->read && provider->connected && provider->capabilities && provider->rumble) return;
+     /* Keep the default SIGINT/SIGTERM: SDL would turn them into an SDL_QUIT
+      * that nothing reads without a window, and Ctrl-C would stop working. */
+     SDL_SetHint(SDL_HINT_NO_SIGNAL_HANDLERS, "1");
+@@ -228,6 +277,8 @@ void xbox_InputInit(void)
+ 
+ DWORD xbox_InputGetState(DWORD dwPort, XBOX_INPUT_STATE *pState)
+ {
++    const XBOX_INPUT_PROVIDER *provider = input_provider();
++    if (provider && provider->read) return provider->read(dwPort, pState);
+     if (dwPort >= XBOX_MAX_CONTROLLERS || !pState)
+         return ERROR_DEVICE_NOT_CONNECTED;
+ 
+@@ -292,6 +343,8 @@ DWORD xbox_InputGetState(DWORD dwPort, XBOX_INPUT_STATE *pState)
+ 
+ DWORD xbox_InputSetState(DWORD dwPort, const XBOX_VIBRATION *pVibration)
+ {
++    const XBOX_INPUT_PROVIDER *provider = input_provider();
++    if (provider && provider->rumble) return provider->rumble(dwPort, pVibration);
+     if (dwPort >= XBOX_MAX_CONTROLLERS || !pVibration)
+         return ERROR_DEVICE_NOT_CONNECTED;
+ 
+@@ -307,12 +360,16 @@ DWORD xbox_InputSetState(DWORD dwPort, const XBOX_VIBRATION *pVibration)
+ 
+ BOOL xbox_InputIsConnected(DWORD dwPort)
+ {
++    const XBOX_INPUT_PROVIDER *provider = input_provider();
++    if (provider && provider->connected) return provider->connected(dwPort);
+     if (dwPort >= XBOX_MAX_CONTROLLERS) return FALSE;
+     return g_controller_connected[dwPort];
+ }
+ 
+ DWORD xbox_InputGetCapabilities(DWORD dwPort, DWORD dwFlags, XBOX_INPUT_CAPABILITIES *pCaps)
+ {
++    const XBOX_INPUT_PROVIDER *provider = input_provider();
++    if (provider && provider->capabilities) return provider->capabilities(dwPort, dwFlags, pCaps);
+     (void)dwFlags;
+     if (dwPort >= XBOX_MAX_CONTROLLERS || !pCaps)
+         return ERROR_DEVICE_NOT_CONNECTED;
+diff --git a/src/input/xinput_xbox.h b/src/input/xinput_xbox.h
+index 4779275..1d3e71f 100644
+--- a/src/input/xinput_xbox.h
++++ b/src/input/xinput_xbox.h
+@@ -87,6 +87,16 @@ typedef struct XBOX_INPUT_CAPABILITIES {
+  * Maps Xbox controller ports to XInput slots.
+  */
+ void xbox_InputInit(void);
++/* Optional host snapshots, atomically installed/removed. Tables are immutable
++ * and must outlive in-flight calls; static const tables are recommended.
++ * NULL callbacks individually retain the original backend. */
++typedef struct XBOX_INPUT_PROVIDER {
++    DWORD (*read)(DWORD port, XBOX_INPUT_STATE *state);
++    BOOL (*connected)(DWORD port);
++    DWORD (*capabilities)(DWORD port, DWORD flags, XBOX_INPUT_CAPABILITIES *caps);
++    DWORD (*rumble)(DWORD port, const XBOX_VIBRATION *vibration);
++} XBOX_INPUT_PROVIDER;
++void xbox_InputSetProvider(const XBOX_INPUT_PROVIDER *provider);
+ 
+ /**
+  * Get the state of a controller.
+diff --git a/src/usb/usb_gamepad.c b/src/usb/usb_gamepad.c
+index bc04e83..a4ceaba 100644
+--- a/src/usb/usb_gamepad.c
++++ b/src/usb/usb_gamepad.c
+@@ -320,6 +320,7 @@ typedef struct {
+ 
+ static PadStep s_script[PAD_SCRIPT_MAX];
+ static int     s_script_len = -1;
++static int     s_script_exclusive;
+ 
+ /* Set by the host when the framebuffer is running.  Frame schedules are in
+  * presented flips, which makes captures independent of wall-clock speed. */
+@@ -419,6 +420,7 @@ static void pad_script_load(void)
+     const char *spec = getenv("RECOMP_PAD_SCRIPT");
+ 
+     s_script_len = 0;
++    s_script_exclusive = spec && *spec;
+     if (!spec || !*spec)
+         return;
+     if (spec[0] == '@') {
+@@ -583,6 +585,17 @@ int usb_gamepad_report(int pad, uint8_t *out, int max)
+     out[0] = 0;
+     out[1] = 20;
+ 
++    /* A startup timeline is a deterministic replay, so physical input must
++     * never enter its reports (including optional diagnostic probes). Cache
++     * this mode with the script; live-only sessions retain their usual merge. */
++    if (s_script_len < 0)
++        pad_script_load();
++    if (s_script_exclusive) {
++        out[2] = pad == 0 ? synth : 0;
++        pad_script_apply(pad, out);
++        return 20;
++    }
++
+     /* A disconnected host pad is not an error here: the device is present on
+      * the bus either way, it just reports nothing pressed. */
+     /* RECOMP_INPUT_DIAG: the whole chain on one line, once a second.

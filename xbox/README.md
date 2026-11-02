@@ -36,6 +36,14 @@ Run from the repository root so asset paths resolve:
 
 ## Controls
 
+The primary `NobleArchimedes` D3D12 build has its own modern controls: mouse
+look, an RE2 Remake-style over-the-shoulder camera (default), a first-person
+camera, and PC mouse buttons. Open the in-game F10 menu's Camera tab or press
+F5/F6; details and settings keys are in
+[modern PC controls](../docs/MODERN_PC_CONTROLS.md).
+
+The rest of this section describes the separate legacy Xbox host.
+
 Run `Configure Controls.cmd` at the repository root, or open Controls with F2
 while playing. The panel is also available directly as
 `xbox/build/Release/NobleControls.exe`; it does not require the game files.

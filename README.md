@@ -34,7 +34,7 @@ The **branded USA build passed 7/7 new-game scenario steps**, including movement
 
 The launcher uses our own observatory artwork and astrolabe icon, plus **The Quiet Orrery**, an original 32-second instrumental loop with a music switch. [Asset provenance and generation prompts](assets/noble/PROVENANCE.md) and the [reproducible music generator](tools/branding/generate_music.py) are included. No game logo, extracted icon or soundtrack is bundled as launcher branding.
 
-Keyboard/controller bindings and graphics, game and language options are available through the imported launcher/menu; consult [upstream controls](xbox/third_party/castlevania-cod-pc/README.md) for the Xbox path. Historical PS2 bindings and renderer environment variables apply only to the experimental PS2 host.
+Keyboard/controller bindings and graphics, game and language options are available through the imported launcher/menu; consult [upstream controls](xbox/third_party/castlevania-cod-pc/README.md) for the Xbox path. The primary Xbox build also adds mouse look, an RE2 Remake-style over-the-shoulder camera (the default), a first-person camera and PC mouse buttons; see [modern PC controls](docs/MODERN_PC_CONTROLS.md). Historical PS2 bindings and renderer environment variables apply only to the experimental PS2 host.
 
 ## Experimental PS2 and renderer research
 

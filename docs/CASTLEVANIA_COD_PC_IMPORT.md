@@ -34,7 +34,7 @@ The default game source is `extracted/default.xbe` with `data`, `movie`, `sound`
 
 Preparation copies our pristine snapshot to `output/jmafort-port`, copies the XBE and makes directory junctions to the three game-data folders. It does not copy gigabytes of assets, alter those files, or share saves. SDK `91146ff6e2a218b19c1109dc665d06020472ab57` is checked out under `output/jmafort-sdk` and the exact donor patch is checked and applied there once. Preparation is repeatable and rejects edited working source or a different SDK revision rather than overwriting them.
 
-Runtime outputs are `output/jmafort-port/out/build/release`. The imported launcher manages its own `castlevania.toml`; saves are in its own `hdd/E/UDATA/4b4e002d`. Existing host saves/settings are not migrated automatically. Put optional PCSX2 HD replacements under `output/jmafort-port/textures`; no texture pack is downloaded or bundled. Gamepad/keyboard defaults and the F10 menu belong to this backend, independently of our modern Controls panel.
+Runtime outputs are `output/jmafort-port/out/build/release`. The imported launcher manages its own `castlevania.toml`; saves are in its own `hdd/E/UDATA/4b4e002d`. Existing host saves/settings are not migrated automatically. Put optional PCSX2 HD replacements under `output/jmafort-port/textures`; no texture pack is downloaded or bundled. Gamepad/keyboard defaults and the F10 menu belong to this backend, independently of our legacy Controls panel. The backend also has its own modern PC controls: relative mouse look, an RE2 Remake-style over-the-shoulder camera (the default) and a first-person camera, configured on the F10 Camera tab; see [modern PC controls](MODERN_PC_CONTROLS.md).
 
 Source verification and preparation without building:
 

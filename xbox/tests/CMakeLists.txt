@@ -1,6 +1,17 @@
 cmake_minimum_required(VERSION 3.20)
 project(xbox_host_regressions C)
+enable_language(CXX)
 enable_testing()
+
+add_executable(modern_camera_math_test modern_camera_math_test.cpp)
+target_include_directories(modern_camera_math_test PRIVATE
+    ../noble/overlay/src)
+target_compile_features(modern_camera_math_test PRIVATE cxx_std_17)
+add_test(NAME modern-camera-math COMMAND modern_camera_math_test)
+find_package(Python3 REQUIRED COMPONENTS Interpreter)
+add_test(NAME modern-camera-integration
+    COMMAND ${Python3_EXECUTABLE} -m unittest discover -s ${CMAKE_CURRENT_SOURCE_DIR}
+        -p test_modern_camera_integration.py)
 add_executable(framebuffer_close_test framebuffer_close_test.c
     ../../tools/xboxrecomp/src/video/fb_present.c
     ../../tools/xboxrecomp/src/input/keyboard.c)

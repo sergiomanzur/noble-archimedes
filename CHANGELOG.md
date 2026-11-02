@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased — modern PC controls (2026-11-02)
+
+- Add direct relative mouse look to the primary Xbox D3D12 build, with automatic capture during gameplay, release on focus loss and the F10 menu, and an F6 override.
+- Add Classic, Resident Evil 2 Remake-style over-the-shoulder (the new default) and first-person camera modes. The camera owns an absolute heading after the title's update; mouse movement changes it once, the title follow camera is steered toward it so `W` moves where the camera points, and the title still supplies the target, distance and scripted transitions.
+- Add left/right/middle/X1/X2 mouse bindings, right-mouse aim with slower walk and a closer camera, F5 mode cycling, and an F10 Camera tab.
+- Persist camera and mouse settings in `castlevania.toml`; add `modern_camera_math_test.cpp` for the imported column-major view matrix and camera placement math.
+- Keep `CV_PAD_SCRIPT`/`CV_PAD_LIVE` deterministic by disabling physical mouse input during those runs. See [modern PC controls](docs/MODERN_PC_CONTROLS.md).
+
 ## v0.9.0b — Xbox-first Noble Archimedes beta (2026-11-02)
 
 - Make the native x64 original Xbox recompilation the primary Windows build, using Direct3D 12 and XAudio2. Keep the PS2 host and older Xbox renderer research explicitly experimental.

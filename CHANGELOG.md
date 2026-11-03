@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased — modern PC controls (2026-11-02)
+## v0.9.1b — Modern PC controls beta (2026-11-02)
 
 - Add direct relative mouse look to the primary Xbox D3D12 build, with automatic capture during gameplay, release on focus loss and the F10 menu, and an F6 override.
 - Add Classic, Resident Evil 2 Remake-style over-the-shoulder (the new default) and first-person camera modes. The camera owns an absolute heading after the title's update; mouse movement changes it once, the title follow camera is steered toward it so `W` moves where the camera points, and the title still supplies the target, distance and scripted transitions.

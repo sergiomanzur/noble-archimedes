@@ -49,7 +49,7 @@ def main():
                 'sdk_patch_applied_to_snapshot': True, 'dependency_pins': pins,
                 'sha256': {name: hashlib.sha256(data).hexdigest() for name, data in sorted(payload.items())}}
     payload['SOURCE-MANIFEST.json'] = (json.dumps(manifest, indent=2) + '\n').encode()
-    payload['README-SOURCE.txt'] = (f'Noble Archimedes 0.9.0b corresponding source\nProject commit: {commit}\n\n'
+    payload['README-SOURCE.txt'] = (f'Noble Archimedes 0.9.1b corresponding source\nProject commit: {commit}\n\n'
         'project/ is the exact release commit. Read project/BUILDING.md and project/LICENSE.\n'
         'dependencies/xbox-xbe-recomp/ is the actual patched SDK source used to build the release.\n'
         'The donor SDK patch is already applied there: do not apply it twice. Other dependency\n'

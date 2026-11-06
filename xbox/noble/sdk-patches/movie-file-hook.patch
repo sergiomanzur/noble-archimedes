@@ -1,0 +1,30 @@
+--- a/runtime/kernel/kernel.h
++++ b/runtime/kernel/kernel.h
+@@ -189,6 +189,9 @@
+ std::string ResolvePath(const std::string& xbox_path, uint32_t root_handle);  // host path or empty
+ bool ReadGameFile(const std::string& xbox_path, std::vector<uint8_t>& out);  // from a host folder or the disc image
+ 
++// Notification of a successful guest file open, installed before boot.
++inline std::function<void(const std::string&)> g_file_opened;
++
+ // boot
+ bool Boot(std::vector<uint8_t> xbe, const std::string& xbe_name, const std::string& game_dir, const std::string& data_dir);
+ [[noreturn]] void Shutdown(int code);
+--- a/runtime/kernel/files.cpp
++++ b/runtime/kernel/files.cpp
+@@ -299,6 +299,7 @@
+     W32(handle_out, NewHandle(f));
+     IoStatus(iosb, kSuccess, 1);
+     LOG_FIRST(400, "open %s", name.c_str());
++    if (g_file_opened) g_file_opened(name);
+     return kSuccess;
+ }
+ 
+@@ -421,6 +422,7 @@
+     W32(handle_out, NewHandle(f));
+     IoStatus(iosb, kSuccess, info);
+     LOG_FIRST(400, "open %s", name.c_str());
++    if (g_file_opened) g_file_opened(name);
+     return kSuccess;
+ }
+ 

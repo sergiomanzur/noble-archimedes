@@ -21,6 +21,8 @@ Source references do not replace corresponding-source/license/notice obligations
 
 ## Primary Xbox attribution and packaging
 
+The Xbox overlay also adapts later CastlevaniaCOD-PC work through upstream commit `7635802e41445486d90b3dbb6b73b5a0fc13392b`. Credit to Jovane Mafort and Calm-Consideration41 (PlatinumMimic) for the view, widescreen, input, sprint, and HD movie work. The original GPLv2 and SDK MIT terms continue to apply to their respective code.
+
 The complete imported README preserves jmafort's credits to [Pazzi7054](https://github.com/Pazzi7054/CastlevaniaCOD-PC), [TGP482](https://github.com/TGP482/XboxXBE-Recomp), [Neguchads](https://github.com/Neguchads/Castlevania-COD-Recomp) and [PCSX2](https://pcsx2.net). Retain those credits, the imported GPLv2 license and the SDK patch's MIT copyright notice in derivative distributions. The source snapshot remains pristine; Noble Archimedes integration and branding are applied to a local working copy.
 
 The imported SDK and build also fetch libraries such as SDL, Dear ImGui, xxHash and toml++. Their own LICENSE/THIRD_PARTY notices and those of transitive components remain authoritative. Packaging must inventory the actual fetched versions and distributed runtime/compiler files. This table is not a substitute for that inventory.

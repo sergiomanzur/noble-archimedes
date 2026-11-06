@@ -32,7 +32,7 @@ class ModernCameraIntegrationTest(unittest.TestCase):
 
     def test_camera_tab_is_registered(self):
         menu = read("common/menu.cpp")
-        self.assertIn('if (ImGui::BeginTabItem("Camera"))', menu)
+        self.assertIn('ImGui::BeginTabItem("Camera"', menu)
         self.assertIn("modern::DrawSettings()", menu)
         self.assertIn("modern::SetMenuOpen(g_open);", menu)
 

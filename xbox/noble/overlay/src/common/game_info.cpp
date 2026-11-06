@@ -15,6 +15,10 @@ extern bool g_texture_pack;                   // texpack.cpp
 extern uint32_t g_texture_pack_size;          // texpack.cpp
 extern uint32_t g_button_layout;              // texpack.cpp
 extern bool g_lament_save;                    // menu.cpp, read by hooks.cpp
+extern uint32_t g_sprint, g_fov, g_draw_distance, g_fog_distance;
+extern bool g_hud_edges, g_ps2_stick, g_hd_movies;
+extern uint32_t g_movie_view;
+void KeyboardRumble(int port, uint16_t& left, uint16_t& right);
 void GameInit();                              // setup.cpp
 extern const app::GameInfo::Release kReleases[];  // each release's xbe and executable, written by CMake
 extern const unsigned kReleaseCount;
@@ -48,6 +52,14 @@ const app::GameInfo app::kGame = {
                 {"texture_pack_size", nullptr, &g_texture_pack_size},
                 {"button_layout", nullptr, &g_button_layout},
                 {"lament_save", &g_lament_save, nullptr},
+                {"sprint", nullptr, &g_sprint},
+                {"fov", nullptr, &g_fov},
+                {"draw_distance", nullptr, &g_draw_distance},
+                {"fog_distance", nullptr, &g_fog_distance},
+                {"hud_edges", &g_hud_edges, nullptr},
+                {"ps2_stick", &g_ps2_stick, nullptr},
+                {"hd_movies", &g_hd_movies, nullptr},
+                {"movie_view", nullptr, &g_movie_view},
                 {"game_language", nullptr, &g_game_language}},
     .load = modern::LoadSettings,          // modern camera and mouse settings (modern_controls.cpp)
     .save = modern::SaveSettings,          // writes them back into castlevania.toml
@@ -57,6 +69,6 @@ const app::GameInfo app::kGame = {
     .message = MenuMessage,               // window messages first; true takes one: F10 for the menu
     .ui = MenuUi,                         // ImGui drawing each frame: the settings menu and FPS counter
     .pad = KeyboardPad,                   // changes a polled pad: keyboard play, CV_PAD_SCRIPT, pause, menu
-    .rumble = nullptr,                    // changes a rumble before it is set
+    .rumble = KeyboardRumble,                    // changes a rumble before it is set
     .language = Language,                 // the console's language the game reads
 };

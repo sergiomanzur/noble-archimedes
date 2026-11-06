@@ -1,0 +1,35 @@
+--- a/runtime/app/app.h
++++ b/runtime/app/app.h
+@@ -46,6 +46,7 @@
+ // the output is 3:2 or wider and widescreen is on: the console reports a widescreen TV and the frame is shown 16:9,
+ // else 4:3 as on a 4:3 TV
+ bool Widescreen();
++float WideAspect();
+ 
+ std::filesystem::path ExeDir();
+ // the game in assets (game_files.cpp): its folder and this executable's xbe, from the extracted files or a disc
+--- a/runtime/app/settings.cpp
++++ b/runtime/app/settings.cpp
+@@ -163,6 +163,11 @@
+     return mode;
+ }
+ 
++float WideAspect() {
++    const Mode output = CachedOutput();
++    return uint64_t(output.width) * 10 < uint64_t(output.height) * 17 ? 16.0f / 10.0f : 16.0f / 9.0f;
++}
++
+ float RenderScale(uint32_t guest_height) {
+     float h = CachedOutput().height * (Get().render_percent / 100.0f);
+     return guest_height ? std::max(h / guest_height, 0.1f) : 1.0f;
+--- a/runtime/gpu/d3d12.cpp
++++ b/runtime/gpu/d3d12.cpp
+@@ -3413,7 +3413,7 @@
+ void D3D12Backend::BlitFrame(Target& t) {
+     // 16:9 when the console reports a widescreen display, else 4:3
+     bool wide = app::Widescreen();
+-    float aspect = wide ? 16.0f / 9.0f : 4.0f / 3.0f;
++    float aspect = wide ? app::WideAspect() : 4.0f / 3.0f;
+     float w = float(bb_w_);
+     float h = float(bb_h_);
+     float vw = std::min(w, h * aspect);

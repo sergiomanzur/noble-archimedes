@@ -15,10 +15,12 @@
 #include <cstdio>
 #include <string>
 #include <vector>
+#include <utility>
 
 #include <imgui.h>
 
 #include "app/app.h"
+#include "core/input.h"
 #include "common/modern_controls.h"
 
 // game settings beside the runtime's, in the settings file (game_info.cpp lists them)
@@ -28,6 +30,11 @@ uint32_t g_menu_key = VK_F10;  // virtual key that opens the menu
 bool g_launcher_keep_open = false;  // the launcher's, kept when the game writes the file
 bool g_lament_save = false;  // as with a Lament of Innocence save on the PS2's memory card (hooks.cpp)
 extern uint32_t g_button_layout;    // texpack.cpp
+
+extern uint32_t g_sprint, g_movie_view;
+extern bool g_hd_movies;
+uint32_t g_fov = 100, g_draw_distance = 100, g_fog_distance = 100;
+bool g_hud_edges = false, g_ps2_stick = false;
 
 namespace {
 
@@ -143,9 +150,16 @@ void GraphicsTab(bool& save) {
                              {"50%", "75%", "100%", "150%", "200%"});
     Row("Anisotropic filtering", "Sharper textures at an angle.");
     save |= Choice<uint32_t>("##aniso", s.aniso, {0, 2, 4, 8, 16}, {"Off", "2x", "4x", "8x", "16x"});
-    Row("Widescreen", "16:9 with more of the world at the sides; the HUD, menus and movies stay 4:3 in the middle. "
-                      "Off shows the game 4:3, as on a 4:3 TV. Needs a 16:9 or wider resolution.");
+    Row("Widescreen", "Adds more world at the sides in 16:9 or 16:10, based on the output resolution. Off uses 4:3.");
     save |= ImGui::Checkbox("##wide", &s.widescreen);
+    Row("HUD at screen edges", "Moves the gameplay HUD toward the widescreen corners.");
+    save |= ImGui::Checkbox("##hud_edges", &g_hud_edges);
+    Row("Field of view", "Widen the gameplay view.");
+    save |= Choice<uint32_t>("##fov", g_fov, {100, 110, 125, 150}, {"100%", "110%", "125%", "150%"});
+    Row("Draw distance", "Extend the distance at which the world is drawn.");
+    save |= Choice<uint32_t>("##draw_distance", g_draw_distance, {100, 150, 200}, {"100%", "150%", "200%"});
+    Row("Fog distance", "Move the fog farther away or turn it off.");
+    save |= Choice<uint32_t>("##fog_distance", g_fog_distance, {100, 150, 200, 0}, {"100%", "150%", "200%", "Off"});
     ImGui::EndTable();
 }
 
@@ -153,6 +167,10 @@ void GameTab(bool& save) {
     if (!BeginRows("game")) return;
     Row("FPS counter", nullptr);
     save |= ImGui::Checkbox("##fpsc", &g_fps_counter);
+    Row("HD movies", "Use a compatible replacement movie pack from the movies folder.");
+    save |= ImGui::Checkbox("##hd_movies", &g_hd_movies);
+    Row("Movie framing", "Keep the original frame, fit the picture, or fill the screen.");
+    save |= Choice<uint32_t>("##movie_view", g_movie_view, {0, 1, 2}, {"Original", "Fit", "Fill"});
     Row("Pause on focus loss", "Stops the game while another window is in front.");
     save |= ImGui::Checkbox("##pause", &g_pause_on_focus_loss);
     Row("Lament of Innocence save", "As the PS2 game with a Lament of Innocence save on the memory card: a Moai "
@@ -164,8 +182,12 @@ void GameTab(bool& save) {
 void ControlsTab(bool& save) {
     if (BeginRows("layout")) {
         Row("Button layout", "PS2: the PS2's button icons (from an HD texture pack made from the PS2 game) and its "
-                             "shoulders: L1 resets the camera, R1 guards, L2 and R2 lock on. From the next start.");
+                             "shoulders: L1 resets the camera, R1 guards, L2 and R2 lock on.");
         save |= Choice<uint32_t>("##layout", g_button_layout, {0, 1}, {"Xbox", "PS2"});
+        Row("PS2 stick response", "Smooth diagonal movement using the PS2 stick response.");
+        save |= ImGui::Checkbox("##ps2_stick", &g_ps2_stick);
+        Row("Sprint", "Click L3 or press Left Shift while moving. Releasing movement ends the sprint.");
+        save |= Choice<uint32_t>("##sprint", g_sprint, {0, 125, 150, 200}, {"Off", "1.25x", "1.5x", "2x"});
         ImGui::EndTable();
     }
     ImGui::Spacing();
@@ -213,6 +235,10 @@ void Defaults() {
     g_fps_counter = false;
     g_pause_on_focus_loss = true;
     g_button_layout = 0;
+    g_sprint = g_movie_view = 0;
+    g_hd_movies = true;
+    g_ps2_stick = g_hud_edges = false;
+    g_fov = g_draw_distance = g_fog_distance = 100;
     g_lament_save = false;
     modern::ResetDefaults();
     app::ApplyDisplay();
@@ -330,6 +356,14 @@ bool MenuMessage(void*, uint32_t msg, uintptr_t wp, intptr_t lp, intptr_t* resul
 void MenuUi(double fps) {
     if (!g_scaled) return;
     PollKeys();
+    static uint8_t previous_pad = 0;
+    const input::Pad pad = input::Raw(0);
+    const uint8_t buttons = (pad.analog[5] ? 1 : 0) | (pad.analog[4] ? 2 : 0) |
+                            ((pad.buttons & 0x10) ? 4 : 0) | (pad.analog[1] ? 8 : 0);
+    const uint8_t pressed = buttons & ~std::exchange(previous_pad, buttons);
+    static bool menu_was_busy = false;
+    static bool shown = false;
+    if (g_open && ((pressed & 4) || ((pressed & 8) && !menu_was_busy))) g_open = false;
     modern::SetMenuOpen(g_open);
     ImGuiIO& io = ImGui::GetIO();
     if (g_fps_counter) {
@@ -341,6 +375,8 @@ void MenuUi(double fps) {
         dl->AddText(at, IM_COL32(255, 230, 140, 255), text);
     }
     if (!g_open) {
+        shown = false;
+        menu_was_busy = false;
         if (modern::MouseCaptured() && GetForegroundWindow() == static_cast<HWND>(app::Window())) {
             const ImVec2 center{io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f};
             const float radius = std::max(2.0f, io.DisplaySize.y / 540.0f);
@@ -354,32 +390,44 @@ void MenuUi(double fps) {
     ImVec2 size{io.DisplaySize.y * 0.75f, io.DisplaySize.y * 0.55f};
     ImGui::SetNextWindowPos({io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f}, ImGuiCond_Always, {0.5f, 0.5f});
     ImGui::SetNextWindowSize(size, ImGuiCond_Always);
-    ImGui::SetNextWindowFocus();
+    // Repeated focus changes close dropdowns and reset controller navigation.
+    if (!shown) ImGui::SetNextWindowFocus();
+    shown = true;
     bool open = true;
     if (ImGui::Begin("Castlevania: Curse of Darkness - Settings", &open,
                      ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoCollapse |
                          ImGuiWindowFlags_NoSavedSettings)) {
         bool save = false;
         float footer = ImGui::GetFrameHeightWithSpacing() + ImGui::GetStyle().ItemSpacing.y;
-        if (ImGui::BeginChild("tabs", {0, -footer})) {
+        static int page = 0;
+        constexpr int count = 5;
+        const int direction = int(bool(pressed & 2)) - int(bool(pressed & 1));
+        const int next = direction ? (page + count + direction) % count : -1;
+        auto select = [&](int i) { return next == i ? ImGuiTabItemFlags_SetSelected : ImGuiTabItemFlags_None; };
+        if (ImGui::BeginChild("tabs", {0, -footer}, ImGuiChildFlags_NavFlattened)) {
             if (ImGui::BeginTabBar("tabbar")) {
-                if (ImGui::BeginTabItem("Display")) {
+                if (ImGui::BeginTabItem("Display", nullptr, select(0))) {
+                    page = 0;
                     DisplayTab(save);
                     ImGui::EndTabItem();
                 }
-                if (ImGui::BeginTabItem("Graphics")) {
+                if (ImGui::BeginTabItem("Graphics", nullptr, select(1))) {
+                    page = 1;
                     GraphicsTab(save);
                     ImGui::EndTabItem();
                 }
-                if (ImGui::BeginTabItem("Game")) {
+                if (ImGui::BeginTabItem("Game", nullptr, select(2))) {
+                    page = 2;
                     GameTab(save);
                     ImGui::EndTabItem();
                 }
-                if (ImGui::BeginTabItem("Controls")) {
+                if (ImGui::BeginTabItem("Controls", nullptr, select(3))) {
+                    page = 3;
                     ControlsTab(save);
                     ImGui::EndTabItem();
                 }
-                if (ImGui::BeginTabItem("Camera")) {
+                if (ImGui::BeginTabItem("Camera", nullptr, select(4))) {
+                    page = 4;
                     CameraTab(save);
                     ImGui::EndTabItem();
                 }
@@ -399,6 +447,7 @@ void MenuUi(double fps) {
         if (ImGui::Button(close.c_str())) open = false;
         if (save) app::Save();
     }
+    menu_was_busy = ImGui::IsAnyItemActive() || ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopup);
     ImGui::End();
     if (!open) g_open = false;
 }

@@ -407,6 +407,9 @@ struct Settings {
     uint32_t game_language = 1;    // the European release's, as the console's (XGetLanguage): kGameLanguages
     bool texture_pack = true;
     uint32_t texture_pack_size = 2048;  // 0 full size
+    uint32_t sprint = 0, fov = 100, draw_distance = 100, fog_distance = 100;
+    bool hud_edges = false, ps2_stick = false, hd_movies = true;
+    uint32_t movie_view = 0;
     uint32_t button_layout = 0;         // 0 Xbox, 1 PS2
     bool lament_save = false;           // the Moai of a Lament of Innocence save (hooks.cpp)
     std::string gpu;                    // the graphics card by its name, empty the fastest (the SDK's)
@@ -436,6 +439,14 @@ struct Settings {
         game_language = rest["game_language"].value_or(GameLanguageFor(language));
         texture_pack = rest["texture_pack"].value_or(texture_pack);
         texture_pack_size = rest["texture_pack_size"].value_or(texture_pack_size);
+        sprint = rest["sprint"].value_or(sprint);
+        fov = rest["fov"].value_or(fov);
+        draw_distance = rest["draw_distance"].value_or(draw_distance);
+        fog_distance = rest["fog_distance"].value_or(fog_distance);
+        hud_edges = rest["hud_edges"].value_or(hud_edges);
+        hd_movies = rest["hd_movies"].value_or(hd_movies);
+        movie_view = rest["movie_view"].value_or(movie_view);
+        ps2_stick = rest["ps2_stick"].value_or(ps2_stick);
         button_layout = rest["button_layout"].value_or(button_layout);
         lament_save = rest["lament_save"].value_or(lament_save);
         gpu = rest["gpu"].value_or(gpu);
@@ -458,6 +469,14 @@ struct Settings {
         rest.insert_or_assign("game_language", int64_t(game_language));
         rest.insert_or_assign("texture_pack", texture_pack);
         rest.insert_or_assign("texture_pack_size", int64_t(texture_pack_size));
+        rest.insert_or_assign("sprint", int64_t(sprint));
+        rest.insert_or_assign("fov", int64_t(fov));
+        rest.insert_or_assign("draw_distance", int64_t(draw_distance));
+        rest.insert_or_assign("fog_distance", int64_t(fog_distance));
+        rest.insert_or_assign("hud_edges", hud_edges);
+        rest.insert_or_assign("hd_movies", hd_movies);
+        rest.insert_or_assign("movie_view", int64_t(movie_view));
+        rest.insert_or_assign("ps2_stick", ps2_stick);
         rest.insert_or_assign("button_layout", int64_t(button_layout));
         rest.insert_or_assign("lament_save", lament_save);
         rest.insert_or_assign("gpu", gpu);
@@ -1196,6 +1215,9 @@ private:
                std::to_string(s.widescreen) + std::to_string(s.fps_counter) + std::to_string(s.pause_on_focus_loss) +
                std::to_string(s.keep_open) + std::to_string(s.launcher_music) + "|" + std::to_string(s.menu_key) + "|" + std::to_string(s.texture_pack) +
                std::to_string(s.texture_pack_size) + "|" + std::to_string(s.button_layout) +
+               std::to_string(s.sprint) + "|" + std::to_string(s.fov) + "|" + std::to_string(s.draw_distance) + "|" +
+               std::to_string(s.fog_distance) + "|" + std::to_string(s.hud_edges) + std::to_string(s.ps2_stick) + "|" +
+               std::to_string(s.hd_movies) + "|" + std::to_string(s.movie_view) + "|" +
                std::to_string(s.lament_save) + "|" + s.gpu + "|" + s.language + "|" + std::to_string(s.game_language);
     }
 
@@ -1387,7 +1409,7 @@ private:
             std::string value;
             int page;
         } tiles[] = {{T("Display"), mode + "  |  " + res, 1},
-                     {T("Widescreen"), settings_.widescreen ? T("On (16:9, Hor+)") : T("Off (4:3)"), 2},
+                     {T("Widescreen"), settings_.widescreen ? T("On") : T("Off (4:3)"), 2},
                      {T("Render scale"), std::to_string(settings_.render_percent) + "%", 2},
                      {T("Menu key"), KeyName(settings_.menu_key) + "  |  L3 + R3", 3}};
         float gap = S(12), tw = (ImGui::GetContentRegionAvail().x - gap) / 2, th = S(68);
@@ -1504,8 +1526,7 @@ private:
         EndSetting();
         EndCard();
         BeginCard("graphics");
-        BeginSetting(T("Widescreen"), T("16:9 with more of the world at the sides, nothing stretched. The HUD, menus and "
-                                        "movies stay 4:3 in the middle. Needs a 16:9 or wider resolution."), true);
+        BeginSetting(T("Widescreen"), T("Adds more world at the sides in 16:9 or 16:10, based on the output resolution."), true);
         ToggleRight("wide", settings_.widescreen);
         EndSetting();
         BeginSetting(T("Render scale"), T("Of the output height. Above 100% supersamples for a sharper picture; below is "
@@ -1514,6 +1535,28 @@ private:
         EndSetting();
         BeginSetting(T("Anisotropic filtering"), T("Sharper textures on floors and walls seen at an angle."));
         Segmented<uint32_t>("aniso", settings_.aniso, {0, 2, 4, 8, 16}, {T("Off"), "2x", "4x", "8x", "16x"});
+        EndSetting();
+        EndCard();
+        BeginCard("view");
+        BeginSetting(T("HUD at screen edges"), T("Moves the gameplay HUD toward the widescreen corners."), true);
+        ToggleRight("hud_edges", settings_.hud_edges);
+        EndSetting();
+        BeginSetting(T("Field of view"), T("Widen the gameplay view."));
+        Segmented<uint32_t>("fov", settings_.fov, {100, 110, 125, 150}, {"100%", "110%", "125%", "150%"});
+        EndSetting();
+        BeginSetting(T("Draw distance"), T("Extend the distance at which the world is drawn."));
+        Segmented<uint32_t>("draw_distance", settings_.draw_distance, {100, 150, 200}, {"100%", "150%", "200%"});
+        EndSetting();
+        BeginSetting(T("Fog distance"), T("Move the fog farther away or turn it off."));
+        Segmented<uint32_t>("fog_distance", settings_.fog_distance, {100, 150, 200, 0}, {"100%", "150%", "200%", T("Off")});
+        EndSetting();
+        EndCard();
+        BeginCard("movies");
+        BeginSetting(T("HD movies"), T("Use a compatible replacement movie pack from the movies folder."), true);
+        ToggleRight("hd_movies", settings_.hd_movies);
+        EndSetting();
+        BeginSetting(T("Movie framing"), T("Keep the original frame, fit the picture, or fill the screen."));
+        Segmented<uint32_t>("movie_view", settings_.movie_view, {0, 1, 2}, {T("Original"), T("Fit"), T("Fill")});
         EndSetting();
         EndCard();
         BeginCard("texpack");
@@ -1601,6 +1644,14 @@ private:
             else if (files_.ps2_buttons) Status(kIconCheck, kGreen, T("PS2 icons found in the texture pack"));
             else Status(kIconWarn, kMuted, T("No PS2 icons in the textures folder: the Xbox ones stay, the shoulders change"));
         }
+        EndCard();
+        BeginCard("movement");
+        BeginSetting(T("Sprint"), T("Click L3 or press Left Shift while moving."), true);
+        Segmented<uint32_t>("sprint", settings_.sprint, {0, 125, 150, 200}, {T("Off"), "1.25x", "1.5x", "2x"});
+        EndSetting();
+        BeginSetting(T("PS2 stick response"), T("Smooth diagonal movement using the PS2 stick response."));
+        ToggleRight("ps2_stick", settings_.ps2_stick);
+        EndSetting();
         EndCard();
         BeginCard("keys");
         // the keys by their names on a keyboard, the controller's buttons (B, Y, Start, Back) by the Xbox's

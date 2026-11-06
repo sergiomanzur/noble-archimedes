@@ -35,6 +35,7 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <utility>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -71,7 +72,7 @@ namespace {
 
 HWND g_hwnd = nullptr;
 
-enum : uint16_t { kUp = 1, kDown = 2, kLeft = 4, kRight = 8, kStart = 0x10, kBack = 0x20 };
+enum : uint16_t { kUp = 1, kDown = 2, kLeft = 4, kRight = 8, kStart = 0x10, kBack = 0x20, kL3 = 0x40, kR3 = 0x80 };
 enum { kA, kB, kX, kY, kBlack, kWhite, kLT, kRT };
 
 bool Down(int vk) { return (GetAsyncKeyState(vk) & 0x8000) != 0; }
@@ -163,6 +164,8 @@ std::vector<Step> ParseScript(std::string text) {
             else if (b == "right") s.buttons |= kRight;
             else if (b == "start") s.buttons |= kStart;
             else if (b == "back") s.buttons |= kBack;
+            else if (b == "l3") s.buttons |= kL3;
+            else if (b == "r3") s.buttons |= kR3;
             else if (b == "a") s.analog |= 1u << kA;
             else if (b == "b") s.analog |= 1u << kB;
             else if (b == "x") s.analog |= 1u << kX;
@@ -207,7 +210,7 @@ void ApplySetting(const std::string& entry) {
     std::string key = entry.substr(0, eq), value = entry.substr(eq + 1);
     // read once at the start (the pack's index and its size, the button sheet): changed here they would only seem to
     // be, so a test asking for one fails (cvtest takes an error line as the step's)
-    for (const char* start : {"texture_pack", "texture_pack_size", "button_layout"})
+    for (const char* start : {"texture_pack", "texture_pack_size"})
         if (key == start) {
             LOGE("live: %s applies from the next start, not here", key.c_str());
             return;
@@ -384,27 +387,104 @@ extern bool g_pause_on_focus_loss;   // menu.cpp
 extern uint32_t g_button_layout;     // texpack.cpp
 std::atomic<bool> g_closing{false};  // the window is closing: a paused game lets go
 
+uint32_t g_sprint = 0;
+
+namespace {
+std::atomic<bool> g_sprinting{false};
+
+// the move stick pushed past the game's own dead zone (16 of the PS2's 128)
+bool Moving(const input::Pad& p) {
+    constexpr float kMove = 4500;
+    return float(p.lx) * float(p.lx) + float(p.ly) * float(p.ly) > kMove * kMove;
+}
+
+void Sprint(const input::Pad& p, bool menu, bool scripted) {
+    static std::atomic<bool> l3_was{false}, shift_was{false};
+    static std::atomic<int64_t> idle_since{-1};  // the frame the stick has been at rest since, -1 moving
+    bool l3 = (p.buttons & kL3) != 0, r3 = (p.buttons & kR3) != 0;
+    bool shift = !scripted && Focused() && Down(VK_LSHIFT);
+    const bool l3_pressed = !l3_was.exchange(l3) && l3 && !r3;
+    const bool shift_pressed = !shift_was.exchange(shift) && shift;
+    if (!g_sprint || menu || (l3 && r3)) {
+        g_sprinting = false;
+        return;
+    }
+    int64_t now = int64_t(d3d::Swaps());
+    if ((l3_pressed || shift_pressed) && Moving(p)) {
+        g_sprinting = true;
+        idle_since = -1;
+    }
+    if (Moving(p)) {
+        idle_since = -1;
+    } else {
+        int64_t was = -1;
+        idle_since.compare_exchange_strong(was, now);
+        if (was >= 0 && now - was > 10) g_sprinting = false;
+    }
+}
+
+}  // namespace
+
+bool SprintOn() { return g_sprint && g_sprinting.load(std::memory_order_relaxed); }
+float SprintFactor() { return float(std::min<uint32_t>(g_sprint, 300)) / 100.0f; }
+
+namespace {
+struct Motors {
+    uint16_t want[2] = {}, sent[2] = {};  // as the game asks for them, as the controller has them
+    std::chrono::steady_clock::time_point read;  // the game's last read of the pad
+};
+std::mutex g_rumble_m;
+Motors g_motors[4];
+thread_local bool t_rumble_own = false;  // a rumble of RumbleFrame's going out
+const bool kRumbleTrace = std::getenv("CV_RUMBLE_TRACE") != nullptr;
+
+// at the game's read of a pad: the motors as the game left them in the frame before, or stopped
+void RumbleFrame(int port, bool stop) {
+    if (port < 0 || port >= 4) return;
+    uint16_t left, right;
+    {
+        std::lock_guard lock(g_rumble_m);
+        Motors& m = g_motors[port];
+        m.read = std::chrono::steady_clock::now();
+        if (stop) m.want[0] = m.want[1] = 0;
+        if (m.want[0] == m.sent[0] && m.want[1] == m.sent[1]) return;
+        left = m.want[0];
+        right = m.want[1];
+    }
+    static uint32_t n = 0;
+    if (kRumbleTrace && n++ < 400) LOGR("rumble sent %u: port %d, %u / %u", n, port + 1, left, right);
+    t_rumble_own = true;
+    input::Rumble(port, left, right);  // through KeyboardRumble, which takes it as it is
+    t_rumble_own = false;
+}
+
+}  // namespace
+
 void KeyboardWindow(void* hwnd) {
     g_hwnd = static_cast<HWND>(hwnd);
     MenuWindow();
 }
 
 void KeyboardPad(int port, input::Pad& p) {
+    RumbleFrame(port, MenuOpen());
     if (port != 0) return;
     const bool scripted = !Script().empty() || LiveOn();
     modern::Frame(Focused(), MenuOpen(), scripted, d3d::Swaps());
     // pause on focus loss: the game stops at its pad read until the window is in front again; not in scripted runs,
     // which go on behind other windows
-    if (g_pause_on_focus_loss && Script().empty() && !LiveOn())
+    if (g_pause_on_focus_loss && !scripted && !Focused()) {
+        RumbleFrame(port, true);
         while (!Focused() && !g_closing && IsWindow(g_hwnd)) Sleep(50);
+    }
     if (LiveOn()) LiveWait();
     p.connected = true;
-    // both sticks clicked in together: the menu from a controller
-    static bool sticks = false;
-    bool both = (p.buttons & 0xC0) == 0xC0;
-    if (both && !sticks) MenuToggle();
-    sticks = both;
+    // The menu chord is based on the physical controller. Scripted L3
+    // presses still exercise the sprint logic below.
+    static std::atomic<bool> sticks{false};
+    bool both = (p.buttons & (kL3 | kR3)) == (kL3 | kR3);
+    if (!sticks.exchange(both) && both) MenuToggle();
     if (MenuOpen()) {
+        Sprint(p, true, scripted);
         // the menu has the keyboard and controller
         p = input::Pad{};
         p.connected = true;
@@ -426,6 +506,27 @@ void KeyboardPad(int port, input::Pad& p) {
         if (l.running) Press(p, l.steps, MsSince(l.start), int64_t(d3d::Swaps() - l.start_frame));
         if (l.running && l.goals) BotPad(p);
     }
+    Sprint(p, false, scripted);
     if (!scripted) modern::ApplyPad(p);
     TelemetryFrame(p);  // the pad as the game gets it, for recorded routes
+}
+
+void KeyboardRumble(int port, uint16_t& left, uint16_t& right) {
+    if (port < 0 || port >= 4) return;
+    std::lock_guard lock(g_rumble_m);
+    Motors& m = g_motors[port];
+    if (kRumbleTrace && !t_rumble_own && (m.want[0] != left || m.want[1] != right)) {
+        static uint32_t n = 0;
+        if (n++ < 400) LOGR("rumble %u: port %d, %u / %u at frame %llu", n, port + 1, left, right,
+                            static_cast<unsigned long long>(d3d::Swaps()));
+    }
+    m.want[0] = left;
+    m.want[1] = right;
+    if (t_rumble_own || std::chrono::steady_clock::now() - m.read > std::chrono::milliseconds(50)) {
+        m.sent[0] = left;
+        m.sent[1] = right;
+        return;
+    }
+    left = m.sent[0];  // the controller's as it is: an unchanged rumble is not sent again
+    right = m.sent[1];
 }

@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- Add optional sprint on Left Shift or L3 with matching movement animation, and optional PS2 analog stick response.
+- Add widescreen HUD placement with special handling for lock-on, boss bars and modal overlays. Use 16:10 presentation on narrower widescreen outputs.
+- Add field of view, draw distance and fog options. Keep the original movie framing by default and support player-supplied HD movie packs.
+- Add controller shoulder navigation in Settings, live button layout changes and improved dual-motor rumble handling.
+
 ## v0.9.4b — First-person camera and mouse reticle (2026-11-06)
 
 - Anchor the first-person camera to Hector’s live position so the third-person follow target no longer drifts behind his head during a run. Look pitch no longer moves the camera’s eye position.

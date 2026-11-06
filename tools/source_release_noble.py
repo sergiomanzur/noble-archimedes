@@ -45,11 +45,11 @@ def main():
                 continue
             payload['dependencies/' + folder.name + '/' + relative.as_posix()] = path.read_bytes()
     version = payload['project/VERSION'].decode().strip()
-    local_patch = 'project/xbox/noble/sdk-patches/frame-copy.patch'
+    local_patches = sorted(name for name in payload if name.startswith('project/xbox/noble/sdk-patches/') and name.endswith('.patch'))
     manifest = {'project_commit': commit, 'sdk_commit': '91146ff6e2a218b19c1109dc665d06020472ab57',
                 'sdk_patch': 'project/xbox/third_party/castlevania-cod-pc/sdk-patches/xboxxbe-recomp.patch',
                 'sdk_patch_applied_to_snapshot': True,
-                'sdk_local_patches': [local_patch] if local_patch in payload else [], 'dependency_pins': pins,
+                'sdk_local_patches': local_patches, 'dependency_pins': pins,
                 'sha256': {name: hashlib.sha256(data).hexdigest() for name, data in sorted(payload.items())}}
     payload['SOURCE-MANIFEST.json'] = (json.dumps(manifest, indent=2) + '\n').encode()
     payload['README-SOURCE.txt'] = (f'Noble Archimedes {version} corresponding source\nProject commit: {commit}\n\n'

@@ -164,6 +164,11 @@ def prepare(assets, eu_assets=None):
         for patch in ((frame_copy_patch,) if applied(donor_patch) else (donor_patch, frame_copy_patch)):
             run('git', '-C', SDK, 'apply', '--check', patch)
             run('git', '-C', SDK, 'apply', patch)
+    for name in ('live-controls.patch', 'wide-aspect.patch', 'movie-file-hook.patch'):
+        patch = ROOT / 'xbox/noble/sdk-patches' / name
+        if not applied(patch):
+            run('git', '-C', SDK, 'apply', '--check', patch)
+            run('git', '-C', SDK, 'apply', patch)
     # XBE copied rather than linked: preparation never changes the user's copy.
     for source, target in [(assets, WORK / 'assets')] + ([(eu_assets, WORK / 'assets/eu')] if eu_assets else []):
         target.mkdir(parents=True, exist_ok=True)

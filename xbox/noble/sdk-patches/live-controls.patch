@@ -1,0 +1,75 @@
+--- a/runtime/core/input.h
++++ b/runtime/core/input.h
+@@ -15,6 +15,8 @@
+ uint16_t HeldOnAnyController();  // face buttons as XINPUT_GAMEPAD_A/B/X/Y masks, GameInfo::pad left out
+ // the controller on that port, then GameInfo::pad
+ Pad Poll(int port);
++// Controller state without game remapping or scripted pad callbacks.
++Pad Raw(int port);
+ void Rumble(int port, uint16_t left, uint16_t right);
+ 
+ }  // namespace input
+--- a/runtime/core/input.cpp
++++ b/runtime/core/input.cpp
+@@ -80,7 +80,7 @@
+     }
+ }
+ 
+-Pad Poll(int port) {
++Pad Raw(int port) {
+     Pad p;
+     {
+         std::lock_guard lock(g_lock);
+--- a/runtime/core/input.cpp
++++ b/runtime/core/input.cpp
+@@ -109,6 +109,11 @@
+             p.ry = int16_t(-1 - axis(SDL_GAMEPAD_AXIS_RIGHTY));
+         }
+     }
++    return p;
++}
++
++Pad Poll(int port) {
++    Pad p = Raw(port);
+     if (app::kGame.pad) app::kGame.pad(port, p);
+     return p;
+ }
+--- a/runtime/gpu/ext.h
++++ b/runtime/gpu/ext.h
+@@ -91,6 +91,7 @@
+     // bound: the target, or a texture with the flags Decoded gave it
+     virtual void Sampled(const TextureDesc&, const Target*, uint8_t /*flags*/, TexInfo&) {}
+     // a guest texture uploaded (palette the P8 colours or null): an id for its replacement, 0 for none
++    virtual uint32_t ReplaceEpoch() { return 0; }
+     virtual uint64_t Replace(const TextureDesc&, const uint8_t* /*guest*/, const uint32_t* /*palette*/) { return 0; }
+     // a bound texture's replacement, asked until given: its pixels once ready, null while it loads
+     virtual std::shared_ptr<const Replacement> Replaced(uint64_t /*id*/) { return nullptr; }
+--- a/runtime/gpu/d3d12.cpp
++++ b/runtime/gpu/d3d12.cpp
+@@ -349,6 +349,7 @@
+     uint32_t pack_gen = 0;      // texturedumper::Generation the key was taken at, 0 after new bytes
+     // Extension::Replace's: the picture drawn instead, made once the extension has it
+     uint64_t repl_id = 0;
++    uint32_t repl_epoch = 0;
+     ComPtr<ID3D12Resource> repl;
+     uint32_t repl_levels = 0;
+ };
+@@ -1988,6 +1989,7 @@
+         auto perf_t = PerfClock::now();
+         uint64_t sig = MemSig(d.data, total) ^ DirtyEpoch(d.data) ^ palette.hash;
+         g_perf.sig += PerfMs(perf_t);
++        const uint64_t previous_sig = tx.sig;
+         if (sig != tx.sig || !same) {
+             PerfScope perf_up{g_perf.texup};
+             g_perf.texups++;
+@@ -1995,6 +1997,10 @@
+             tx.sig = sig;
+             UploadTexture(tx, d, fi, p, colours, same);
+             tx.pack_gen = 0;
++        }
++        uint32_t epoch = ext_ ? ext_->ReplaceEpoch() : 0;
++        if (sig != previous_sig || !same || epoch != tx.repl_epoch) {
++            tx.repl_epoch = epoch;
+             uint64_t id = ext_ ? ext_->Replace(d, p, colours) : 0;
+             if (id != tx.repl_id) {
+                 if (tx.repl) CurrentFrame().garbage.push_back(tx.repl);

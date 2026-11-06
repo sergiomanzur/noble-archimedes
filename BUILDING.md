@@ -27,6 +27,8 @@ The main output directory is `output/jmafort-port/out/build/release/`. It contai
 
 The root CMake default delegates to this Xbox build through the Python helper. It does not compile the experimental PS2 host unless explicitly configured with `-DNOBLE_EXPERIMENTAL_PS2=ON`.
 
+For HD movie replacements, put a compatible pack's `movies.toml`, signatures and video files in `movies/` beside the game executable. On Windows the decoder uses Media Foundation. The game's disc still supplies the timing and audio. Use **HD movies** and **Movie framing** in the launcher or in-game settings. See the [upstream pack format](https://github.com/jmafort/CastlevaniaCOD-PC#hd-movies).
+
 ## European Xbox release
 
 Retain USA assets for the main build and add a separate extracted European Xbox copy:

@@ -19,6 +19,8 @@ Target: Windows x64 and a Direct3D 12 capable GPU. Building requires Python 3, G
 
 The build helper verifies the upstream snapshot, prepares an isolated working copy and fetches the pinned open-source SDK. Game code is generated locally from your XBE. The launcher and game are written to `output/jmafort-port/out/build/release/` as `NobleArchimedesLauncher.exe` and `NobleArchimedes.exe`. Primary CMake targets and generated game-DLL names use `NobleArchimedes*`; some internal window classes, logs and settings retain upstream compatibility names. See [BUILDING.md](BUILDING.md) for input validation, EU preparation, alternate asset paths and the experimental PS2 workflow.
 
+The development branch also has an opt-in advanced renderer and native Linux preview, with a Steam Deck packaging workflow. See the [preview build instructions](BUILDING.md#native-linux-and-advanced-graphics-preview).
+
 ## Xbox features and validation
 
 The imported implementation includes:

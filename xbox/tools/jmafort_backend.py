@@ -7,6 +7,7 @@ import re
 from pathlib import Path
 import shutil
 import subprocess
+import sys
 
 ROOT = Path(__file__).resolve().parents[2]
 SNAPSHOT = ROOT / 'xbox/third_party/castlevania-cod-pc'
@@ -218,4 +219,9 @@ def main():
 
 
 if __name__ == '__main__':
-    main()
+    if '--advanced' in sys.argv:
+        sys.argv.remove('--advanced')
+        from noble_next import main as advanced_main
+        advanced_main()
+    else:
+        main()

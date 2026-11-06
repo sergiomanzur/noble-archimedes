@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Add an opt-in preview build for the upstream advanced renderer and native Linux, with a portable Linux packaging path for Steam Deck.
 - Make first-person movement follow the mouse view immediately, including after a quick turn in the opposite direction.
 - Show a region picker next to Play when both the USA and European game copies and their matching executables are available.
 

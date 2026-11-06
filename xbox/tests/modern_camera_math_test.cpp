@@ -88,6 +88,28 @@ void TestFirstPerson() {
           "turning rotates forward clearance and the extra offset without moving the eye line");
 }
 
+void TestFirstPersonMovement() {
+    using modern::math::kPi;
+    using modern::math::RebaseMovement;
+    int16_t x = 0, y = 32767;
+    RebaseMovement(x, y, kPi, 0);
+    Check(x == 0 && y == -32767, "forward reverses immediately after a half turn");
+
+    x = 0;
+    y = 16000;
+    RebaseMovement(x, y, kPi / 2, 0);
+    Check(x == 16000 && y == 0, "a quarter turn preserves analog strength");
+
+    x = 10000;
+    y = 0;
+    RebaseMovement(x, y, 0, kPi / 2);
+    Check(x == 0 && y == 10000, "strafe compensates for a nonzero follow heading");
+
+    x = y = 32767;
+    RebaseMovement(x, y, kPi / 4, 0);
+    Check(x == 32767 && y == 0, "full diagonal rotates without clipping its direction");
+}
+
 }  // namespace
 
 int main() {
@@ -95,6 +117,7 @@ int main() {
     TestBasisFromAngles();
     TestOrbitPosition();
     TestFirstPerson();
+    TestFirstPersonMovement();
     if (failures) {
         std::fprintf(stderr, "modern camera math: %d failure(s)\n", failures);
         return 1;

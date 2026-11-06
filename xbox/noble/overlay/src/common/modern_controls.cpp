@@ -261,14 +261,16 @@ void ApplyPad(input::Pad& pad) {
     // heading instead of letting the title camera's own follow change it.
     uint32_t frame = d3d::Swaps();
     static uint32_t stick_frame = ~0u;
-    if (g_mode.load() == kClassic) {
+    const int mode = g_mode.load();
+    g_move_amount = std::max(std::fabs(static_cast<float>(pad.lx)), std::fabs(static_cast<float>(pad.ly))) /
+                    32767.0f;
+    if (mode == kClassic) {
         // The title's raw camera stick is inverted. These default-on flips
         // correct it without changing the original camera itself.
         if (g_stick_invert_x.load()) pad.rx = static_cast<int16_t>(-pad.rx);
         if (g_stick_invert_y.load()) pad.ry = static_cast<int16_t>(-pad.ry);
-    } else if (frame != stick_frame) {
-        stick_frame = frame;
-        if (pad.rx != 0 || pad.ry != 0) {
+    } else {
+        if (frame != stick_frame && (pad.rx != 0 || pad.ry != 0)) {
             float rx = (pad.rx / 32767.0f) * (g_stick_invert_x.load() ? 1.0f : -1.0f);
             float ry = (pad.ry / 32767.0f) * (g_stick_invert_y.load() ? 1.0f : -1.0f);
             float yaw = g_camera_yaw.load() + rx * kStickRadiansPerFrame;
@@ -278,20 +280,23 @@ void ApplyPad(input::Pad& pad) {
             g_camera_yaw = yaw;
             g_camera_pitch = Clamp(pitch, -kMaxPitch, kMaxPitch);
         }
+        stick_frame = frame;
 
         // Steer the title camera toward the host heading. Movement is
         // relative to this camera, so keeping it aligned makes W follow
         // the mouse without bypassing the title's own movement rules.
         float base = g_base_heading.load();
-        float error = g_camera_yaw.load() - base;
+        float yaw = g_camera_yaw.load();
+        if (mode == kFirstPerson && !g_camera_need_init.load()) {
+            math::RebaseMovement(pad.lx, pad.ly, yaw, base);
+        }
+        float error = yaw - base;
         while (error > math::kPi) error -= 2.0f * math::kPi;
         while (error < -math::kPi) error += 2.0f * math::kPi;
         float command = Clamp(error * 2.0f, -1.0f, 1.0f);
         pad.rx = static_cast<int16_t>(Clamp(-command, -1.0f, 1.0f) * 32767.0f);
         pad.ry = 0;
     }
-    g_move_amount = std::max(std::fabs(static_cast<float>(pad.lx)), std::fabs(static_cast<float>(pad.ly))) /
-                    32767.0f;
     if (!g_captured) return;
     // The guest's analog array is A, B, X, Y, black, white, LT, RT.
     if (GetAsyncKeyState(VK_LBUTTON) & 0x8000) pad.analog[2] = 0xFF;   // X: attack

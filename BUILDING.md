@@ -39,6 +39,8 @@ python xbox/tools/jmafort_backend.py --assets "D:/MyGames/CoD-USA" --eu-assets "
 
 The EU XBE SHA-1 expected by the helper is `b1910aaa4897cc9ca9627190289bf18d6a0943bd`. The additional application is `NobleArchimedesEU.exe`. The helper creates an `eu-play/` layout beside the main build so EU discovery uses the EU game files. EU source/configuration support is imported from upstream; **no EU game image was available to qualify EU compilation, gameplay or language selection locally**. Treat it as unqualified until tested with your own copy.
 
+If you put both regions' disc images in one `assets/` folder beside a launcher and both matching executables, the Home page shows a **USA / PAL / EU** picker next to **Play**. With one playable region, **Play** starts that region directly.
+
 ## Xbox verification and distribution
 
 ```powershell

@@ -322,12 +322,20 @@ struct Files {
     static bool Good(const Copy& c) { return c.release == Release::Match || c.release == Release::Patched; }
     // The executable that plays the game found, as each executable picks its game (the SDK's game_files.cpp): a copy
     // of the USA release anywhere first, the extracted files before a disc image; empty with none, or without it.
-    fs::path Player() const {
+    bool CanPlay(unsigned which) const {
+        if (which >= kReleaseCount) return false;
+        const bool found = (Good(xbe) && xbe.which == int(which)) ||
+                           std::any_of(isos.begin(), isos.end(), [&](const Image& i) {
+                               return Good(i.copy) && i.copy.which == int(which);
+                           });
+        std::error_code ec;
+        return found && fs::is_regular_file(ReleaseExe(int(which)), ec);
+    }
+
+    fs::path Player(unsigned preferred = 0) const {
+        if (CanPlay(preferred)) return ReleaseExe(int(preferred));
         for (unsigned which = 0; which < kReleaseCount; which++) {
-            bool found = (Good(xbe) && xbe.which == int(which)) ||
-                         std::any_of(isos.begin(), isos.end(), [&](const Image& i) { return Good(i.copy) && i.copy.which == int(which); });
-            std::error_code ec;
-            if (found && fs::exists(ReleaseExe(int(which)), ec)) return ReleaseExe(int(which));
+            if (CanPlay(which)) return ReleaseExe(int(which));
         }
         return {};
     }
@@ -1352,13 +1360,23 @@ private:
         ImGui::BeginDisabled(!ready || import_.running);
         if (Button(T("Play"), {S(230), S(54)}, Kind::Primary, g_button)) keep = Play();
         ImGui::EndDisabled();
+        const float button_bottom = ImGui::GetItemRectMax().y;
+        if (files_.CanPlay(0) && files_.CanPlay(1)) {
+            ImGui::SameLine(0, S(22));
+            ImGui::SetNextItemWidth(S(116));
+            if (ImGui::BeginCombo("##play-release", play_release_ == 0 ? "USA" : "PAL / EU")) {
+                if (ImGui::Selectable("USA", play_release_ == 0)) play_release_ = 0;
+                if (ImGui::Selectable("PAL / EU", play_release_ == 1)) play_release_ = 1;
+                ImGui::EndCombo();
+            }
+        }
         if (!ready) {
             ImGui::SameLine(0, S(22));
             if (Button(T("Set up game files"), {0, S(54)}, Kind::Secondary)) page_ = 5;
         }
         // beside the buttons, mid way down them (a line of its own: SameLine would put it at their top)
         ImVec2 end = ImGui::GetItemRectMax();
-        ImGui::SetCursorScreenPos({end.x + S(20), end.y - S(54) * 0.5f - g_semi->FontSize * 0.5f});
+        ImGui::SetCursorScreenPos({end.x + S(20), button_bottom - S(54) * 0.5f - g_semi->FontSize * 0.5f});
         if (!UsedGpu().d3d12) Status(kIconWarn, kRed, T("No Direct3D 12"));
         else if (ready) Status(kIconCheck, kGreen, T("Ready to play"));
         else if (!files_.exe) Status(kIconWarn, kRed, T("NobleArchimedes.exe is missing"));
@@ -1745,7 +1763,7 @@ private:
             Note(T("Could not write the settings file"));
             return true;
         }
-        fs::path exe = files_.Player();
+        fs::path exe = files_.Player(play_release_);
         std::wstring cmd = L"\"" + exe.wstring() + L"\"";
         STARTUPINFOW si{sizeof(si)};
         PROCESS_INFORMATION pi{};
@@ -1814,6 +1832,7 @@ private:
 
     Settings settings_;
     Files files_;
+    unsigned play_release_ = 0;
     std::vector<Gpu> gpus_;
     Gpu auto_gpu_;
     Picture background_, crest_;

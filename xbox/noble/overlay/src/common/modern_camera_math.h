@@ -4,7 +4,9 @@
 // below, and the translation column is -R * cameraPosition.
 #pragma once
 
+#include <algorithm>
 #include <cmath>
+#include <cstdint>
 
 namespace modern {
 namespace math {
@@ -58,6 +60,19 @@ inline void FirstPersonPosition(const float player[3], float yaw, float forward_
     out[0] = player[0] + std::sin(yaw) * distance;
     out[1] = player[1] - eye_height;
     out[2] = player[2] + std::cos(yaw) * distance;
+}
+
+// Express movement in the title's follow-camera coordinates. Rotate both axes
+// together and scale only if the result cannot fit in the guest stick range.
+inline void RebaseMovement(int16_t& x, int16_t& y, float view_yaw, float follow_yaw) {
+    const float turn = view_yaw - follow_yaw;
+    const float c = std::cos(turn), s = std::sin(turn);
+    const float right = x * c + y * s;
+    const float forward = y * c - x * s;
+    const float peak = std::max({32767.0f, std::fabs(right), std::fabs(forward)});
+    const float scale = 32767.0f / peak;
+    x = static_cast<int16_t>(std::lround(right * scale));
+    y = static_cast<int16_t>(std::lround(forward * scale));
 }
 
 // Column-major memory layout used by the title: strided rows of the rotation

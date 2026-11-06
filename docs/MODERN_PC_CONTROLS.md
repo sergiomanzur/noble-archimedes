@@ -64,11 +64,10 @@ stops the camera immediately; there is no residual stick value or continued
 turning. The camera owns an absolute heading, while the title still supplies
 the player target, a collision-informed distance and scripted camera changes.
 
-Movement in this title is relative to its own follow camera. The host steers
-that camera toward the same heading with the right-stick channel, so `W` goes
-where the mouse is pointing instead of continuing along the old character
-path. While moving, the game turns the character toward the movement direction;
-while idle, the host turns the character to the camera heading.
+In first person, movement follows the direction you're looking as soon as you
+turn. This also applies to strafing and diagonal movement. The game turns
+Hector toward his direction of travel while moving. While idle, he faces the
+camera's heading.
 
 ## Settings
 
@@ -112,9 +111,8 @@ In-engine movies, menus and the title screen still use the original camera.
 
 ## Known limits
 
-- The title's follow camera has its own maximum turn rate. A very fast mouse
-  swing can leave movement briefly aligned with the previous heading while
-  that camera catches up; normal turns and gradual flicks align immediately.
+- In over-the-shoulder mode, movement follows the title's follow camera. After
+  a fast mouse turn, it can take a moment for movement to align with the view.
 - Over-the-shoulder uses the title camera's current distance as the orbit
   radius. The base distance and shoulder offset were collision-safe for the
   original heading, but a large free-look rotation near a wall can still clip.

@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Make first-person movement follow the mouse view immediately, including after a quick turn in the opposite direction.
+- Show a region picker next to Play when both the USA and European game copies and their matching executables are available.
+
 - Add optional sprint on Left Shift or L3 with matching movement animation, and optional PS2 analog stick response.
 - Add widescreen HUD placement with special handling for lock-on, boss bars and modal overlays. Use 16:10 presentation on narrower widescreen outputs.
 - Add field of view, draw distance and fog options. Keep the original movie framing by default and support player-supplied HD movie packs.

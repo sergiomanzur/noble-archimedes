@@ -15,7 +15,7 @@ cd noble-archimedes
 & ".\Launch Noble Archimedes.cmd"
 ```
 
-`Build Noble Archimedes.cmd` compiles the locally translated game DLL as well as the runtime/launcher; it can take time. To defer game-DLL compilation to first launch, use `Build Xbox D3D12.cmd` without `--full-game` (or the Python helper with `--build` alone). The wrapper prepares `output/jmafort-port/`, verifies the pristine source inventory under `xbox/third_party/castlevania-cod-pc/`, and uses SDK commit `91146ff6e2a218b19c1109dc665d06020472ab57` plus the donor's MIT SDK patch. Do not edit generated working-copy source as your maintained source; preserve any existing changes before preparing another version.
+`Build Noble Archimedes.cmd` compiles the locally translated game DLL as well as the runtime/launcher; it can take time. To defer game-DLL compilation to first launch, use `Build Xbox D3D12.cmd` without `--full-game` (or the Python helper with `--build` alone). The wrapper prepares `output/jmafort-port/`, verifies the pristine source inventory under `xbox/third_party/castlevania-cod-pc/`, and uses SDK commit `91146ff6e2a218b19c1109dc665d06020472ab57` with the donor's MIT SDK patch and the [local frame copy patch](xbox/noble/sdk-patches/frame-copy.patch). Do not edit generated working-copy source as your maintained source; preserve any existing changes before preparing another version.
 
 For a different extracted game directory:
 
@@ -44,6 +44,8 @@ python xbox/tools/jmafort_backend.py --verify
 python -m unittest discover -s xbox/tests -p test_jmafort_backend.py
 python -m unittest discover -s xbox/tests -p test_imported_game_state.py
 ```
+
+After preparing the Xbox SDK, run `xbox\tests\run_frame_copy_shader_test.cmd` to check the frame copy shaders without opening a game window.
 
 These checks verify source/preparation helpers and diagnostics; they do not certify a complete playthrough. The branded USA build passed 7/7 new-game/movement/menu steps, and its no-DLL first-run test passed 8/8 startup/gameplay checks. To run the main test groups and reproduce first-run compilation:
 

@@ -1,0 +1,98 @@
+--- a/runtime/gpu/shaders.h
++++ b/runtime/gpu/shaders.h
+@@ -14,10 +14,11 @@
+     uint8_t kind = kTexNone;
+     uint8_t rect = 0;    // linear texture, coordinates in texels
+     uint8_t shadow = 0;  // depth texture: 1 D24, 2 D16
+-    uint8_t flags = 0;   // kTexWide, kTexTarget; bits 0 and 1 are a backend extension's
++    uint8_t flags = 0;   // texture sampling flags; bits 0 and 1 are a backend extension's
+ };
+ enum : uint8_t {
+     kTexWide = 4,    // an upscaled target shrunk by the pass: each tap averaged over console texels
++    kTexFrameCopy = 16,  // screen-aligned copy of the game frame, at mip level zero
+     kTexTarget = 8,  // a render target, read where the console's pixel offset puts it (DrawConstants::rtshift)
+ };
+ 
+@@ -108,6 +109,7 @@
+     float amb[4];        // D3DRS_AMBIENT
+     float lt[8][7][4];   // per light: diffuse, specular, ambient, position range, direction falloff, attenuation, cos theta/2 phi/2
+     float rtshift[4];    // per kTexTarget stage: host pixels its reads move along x and y, negative up and left
+     float zparams[4];    // ReversedDepthHlsl: a w buffer's scale (0 for a z buffer), its far w, the polygon offset
++    float frame_copy_uv[4]; // inverse destination extent, then source UV at its origin
+ };
+ 
+--- a/runtime/gpu/shaders.cpp
++++ b/runtime/gpu/shaders.cpp
+@@ -54,6 +54,7 @@
+     float4 amb;
+     float4 lt[56];
+     float4 rtshift;
+     float4 zparams;
++    float4 frame_copy_uv;
+ };
+ )";
+@@ -392,6 +393,7 @@
+ // stage i's coordinates as the title wrote them, over 0..1. The console draws half a pixel right and down of the
+ // host unless a program writes positions raw: a render target is read where the console's offset puts it
+ std::string TexUv(const TexInfo& t, int i, const std::string& uv) {
++    if (t.flags & kTexFrameCopy) return "(i.pos.xy * frame_copy_uv.xy + frame_copy_uv.zw)";
+     std::string n = "(" + uv + ")";
+     if (t.rect) n += F(" / texsize[%d].xy", i);
+     n += F(" + texsize[%d].zw", i);
+@@ -414,6 +416,7 @@
+         return F("float dp%d%s = dot(tc%d.xyz, %s);\n", n, coord == n ? "" : "n", coord, DotInput(map, src).c_str());
+     };
+     auto tex2d = [&](const std::string& uv) {
++        if (t.flags & kTexFrameCopy) return F("tex%d.SampleLevel(smp%d, %s, 0)", i, i, uv.c_str());
+         if (t.flags & kTexWide) return F("spreadtap(tex%d, smp%d, %s, spread[%d], %s)", i, i, uv.c_str(), i, Hooks().ReadScale(t).c_str());
+         return F("tex%d.Sample(smp%d, %s)", i, i, uv.c_str());
+     };
+@@ -949,6 +952,8 @@
+             if (t.shadow)
+                 body += F("float4 t%d = shadow(tex%d, smp%d, ", i, i, i) + TexUv(t, i, F("tc%d.xy / tc%d.w", i, i)) +
+                         F(", tc%d.z / tc%d.w, %d, i.pos.xy, texsize[%d].xy);\n", i, i, t.shadow, i);
++            else if (t.kind == kTex2D && (t.flags & kTexFrameCopy))
++                body += F("float4 t%d = tex%d.SampleLevel(smp%d, %s, 0);\n", i, i, i, uv.c_str());
+             else if (t.kind == kTex2D && (t.flags & kTexWide))
+                 body += F("float4 t%d = spreadtap(tex%d, smp%d, %s, spread[%d], %s);\n", i, i, i, uv.c_str(), i, Hooks().ReadScale(t).c_str());
+             else if (t.kind == kTex2D) body += F("float4 t%d = tex%d.Sample(smp%d, %s);\n", i, i, i, uv.c_str());
+--- a/runtime/gpu/d3d12.cpp
++++ b/runtime/gpu/d3d12.cpp
+@@ -2132,16 +2132,17 @@
+     // whose textures have none (Castlevania's) gets its samples along a slope from level 0, where surfaces seen at an
+     // angle shimmer without them; a quad drawn flat to the screen samples the same as before
+     if (aniso && lin(min) && !stages.info[i].shadow) an = aniso;
+-    if (an > 1) {
++    const bool frame_copy = (stages.info[i].flags & kTexFrameCopy) != 0;
++    if (an > 1 && !frame_copy) {
+         sd.Filter = D3D12_FILTER_ANISOTROPIC;
+         sd.MaxAnisotropy = std::min<uint32_t>(an, 16);
+     }
+     // clamp: the draw's coordinates all lie in 0..1 (UnitTexcoords), so wrap is read as clamp
+-    sd.AddressU = Address(clamp && t[kTssAddressU] == kTaddressWrap ? kTaddressClamp : t[kTssAddressU]);
+-    sd.AddressV = Address(clamp && t[kTssAddressV] == kTaddressWrap ? kTaddressClamp : t[kTssAddressV]);
++    sd.AddressU = Address(frame_copy || (clamp && t[kTssAddressU] == kTaddressWrap) ? kTaddressClamp : t[kTssAddressU]);
++    sd.AddressV = Address(frame_copy || (clamp && t[kTssAddressV] == kTaddressWrap) ? kTaddressClamp : t[kTssAddressV]);
+     sd.AddressW = Address(t[kTssAddressW]);
+     sd.MipLODBias = Bits(t[kTssMipLodBias]);
+-    sd.MinLOD = stages.replaced[i] ? 0.0f : float(t[kTssMaxMipLevel]);
++    sd.MinLOD = frame_copy || stages.replaced[i] ? 0.0f : float(t[kTssMaxMipLevel]);
+     sd.MaxLOD = mip ? D3D12_FLOAT32_MAX : sd.MinLOD;
+     Color(t[kTssBorderColor], sd.BorderColor);
+     if (stages.info[i].shadow) {
+@@ -2425,6 +2426,15 @@
+         TextureDesc d;
+         if (s.textures[size_t(i)] && Describe(s.textures[size_t(i)], d)) FillTexelConstants(i, d, stages, c);
+         if (stages.rt[i]) c.rtshift[i] = RenderTargetShift(s, sh);
++        if (stages.info[i].flags & kTexFrameCopy) {
++            // The game places each texel one guest pixel up and left. Keep the
++            // usual Xbox render target phase without differentiating its UVs.
++            float* uv = c.frame_copy_uv;
++            uv[0] = 1.0f / bound_rt_->w;
++            uv[1] = 1.0f / bound_rt_->h;
++            uv[2] = 1.0f / c.texsize[i][0] + c.rtshift[i] * uv[0];
++            uv[3] = 1.0f / c.texsize[i][1] + c.rtshift[i] * uv[1];
++        }
+         const auto& t = s.tss[size_t(i)];
+         c.bump[i][0] = Bits(t[kTssBumpEnvMat00]);
+         c.bump[i][1] = Bits(t[kTssBumpEnvMat01]);

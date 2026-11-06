@@ -29,7 +29,7 @@ class ReleaseTests(unittest.TestCase):
             self.put(self.sdk / name)
         for name in self.mod.REDIST_FILES:
             self.put(self.redist / name)
-        self.put(self.build / 'version.txt', '0.9.0b')
+        self.put(self.build / 'version.txt', self.mod.VERSION)
         self.put(self.build / '_deps/sdl3-src/LICENSE.txt')
         self.put(self.build / '_deps/sdl3-src/vendor/nested/COPYING')
 

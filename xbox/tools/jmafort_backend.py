@@ -151,13 +151,19 @@ def prepare(assets, eu_assets=None):
     revision = subprocess.check_output(['git', '-C', str(SDK), 'rev-parse', 'HEAD'], text=True).strip()
     if revision != manifest['sdk_commit']:
         raise RuntimeError(f'SDK revision {revision} differs from pinned {manifest["sdk_commit"]}')
-    patch = SNAPSHOT / 'sdk-patches/xboxxbe-recomp.patch'
-    # Check both directions: a second preparation must not apply a patch twice.
-    reverse = subprocess.run(['git', '-C', str(SDK), 'apply', '--reverse', '--check', str(patch)],
-                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    if reverse.returncode:
-        run('git', '-C', SDK, 'apply', '--check', patch)
-        run('git', '-C', SDK, 'apply', patch)
+    donor_patch = SNAPSHOT / 'sdk-patches/xboxxbe-recomp.patch'
+    frame_copy_patch = ROOT / 'xbox/noble/sdk-patches/frame-copy.patch'
+
+    def applied(patch):
+        return subprocess.run(['git', '-C', str(SDK), 'apply', '--reverse', '--check', str(patch)],
+                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0
+
+    # The local patch can overlap the donor's changes. Check the top of the
+    # stack first so repeated builds do not try to reapply the donor patch.
+    if not applied(frame_copy_patch):
+        for patch in ((frame_copy_patch,) if applied(donor_patch) else (donor_patch, frame_copy_patch)):
+            run('git', '-C', SDK, 'apply', '--check', patch)
+            run('git', '-C', SDK, 'apply', patch)
     # XBE copied rather than linked: preparation never changes the user's copy.
     for source, target in [(assets, WORK / 'assets')] + ([(eu_assets, WORK / 'assets/eu')] if eu_assets else []):
         target.mkdir(parents=True, exist_ok=True)

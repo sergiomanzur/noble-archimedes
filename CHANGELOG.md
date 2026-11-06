@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.9.3b — Graphics hotfix (2026-11-06)
+
+- Copy the Xbox game's completed frame using screen pixel coordinates and explicit base-level sampling. This removes derivative-based sampling from the full-frame pass shared by the title screen and gameplay to address reports of stretched streaks.
+- Carries forward the in-game cursor fix and independent **Invert camera stick X** and **Invert camera stick Y** settings from v0.9.2b.
+- Verified headlessly on an RTX 3080 with 4K display settings, 200% render scale and a synthetic HD texture replacement. Confirmation on the reported Radeon RX setup is pending.
+
 ## v0.9.2b — Cursor and camera-stick fixes (2026-11-06)
 
 - Re-assert the hidden cursor every captured frame and restore the normal arrow when capture is released, preventing a visible cursor from remaining parked at the screen centre.

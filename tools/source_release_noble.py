@@ -44,15 +44,18 @@ def main():
             if path.name == '.git':
                 continue
             payload['dependencies/' + folder.name + '/' + relative.as_posix()] = path.read_bytes()
+    version = payload['project/VERSION'].decode().strip()
+    local_patch = 'project/xbox/noble/sdk-patches/frame-copy.patch'
     manifest = {'project_commit': commit, 'sdk_commit': '91146ff6e2a218b19c1109dc665d06020472ab57',
                 'sdk_patch': 'project/xbox/third_party/castlevania-cod-pc/sdk-patches/xboxxbe-recomp.patch',
-                'sdk_patch_applied_to_snapshot': True, 'dependency_pins': pins,
+                'sdk_patch_applied_to_snapshot': True,
+                'sdk_local_patches': [local_patch] if local_patch in payload else [], 'dependency_pins': pins,
                 'sha256': {name: hashlib.sha256(data).hexdigest() for name, data in sorted(payload.items())}}
     payload['SOURCE-MANIFEST.json'] = (json.dumps(manifest, indent=2) + '\n').encode()
-    payload['README-SOURCE.txt'] = (f'Noble Archimedes 0.9.2b corresponding source\nProject commit: {commit}\n\n'
+    payload['README-SOURCE.txt'] = (f'Noble Archimedes {version} corresponding source\nProject commit: {commit}\n\n'
         'project/ is the exact release commit. Read project/BUILDING.md and project/LICENSE.\n'
         'dependencies/xbox-xbe-recomp/ is the actual patched SDK source used to build the release.\n'
-        'The donor SDK patch is already applied there: do not apply it twice. Other dependency\n'
+        'The SDK patches listed in SOURCE-MANIFEST.json are already applied there. Other dependency\n'
         'source trees and their notices are included. The build helper normally fetches pinned\n'
         'sources itself; these snapshots make the compiled runtime inputs available offline.\n'
         'LLVM compiler binaries are a separate Apache-licensed build tool; their license is\n'

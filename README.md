@@ -1,6 +1,6 @@
 # Noble Archimedes
 
-**Latest beta: [v0.9.2b](https://github.com/sergiomanzur/noble-archimedes/releases/tag/v0.9.2b).** The Windows download is USA Xbox only and compiles the game locally on first run. This build adds direct mouse look and over-the-shoulder/first-person cameras; see [modern PC controls](docs/MODERN_PC_CONTROLS.md). A companion source archive and SHA-256 checksums accompany the release.
+**Latest beta: [v0.9.3b](https://github.com/sergiomanzur/noble-archimedes/releases/tag/v0.9.3b).** This graphics hotfix targets stretched streaks on the title screen and during gameplay. It includes the in-game cursor fix and independent right-stick camera inversion, including **Invert camera stick Y** for up and down. See [modern PC controls](docs/MODERN_PC_CONTROLS.md) and the [changelog](CHANGELOG.md). The Windows download uses the USA Xbox release and compiles the game locally on first run. The release includes a companion source archive and SHA-256 checksums.
 
 <img src="assets/noble/noble-icon.png" width="112" alt="Original Noble Archimedes astrolabe emblem">
 

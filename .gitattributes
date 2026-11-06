@@ -4,3 +4,4 @@ licenses/* -whitespace
 patches/xbox-modern-input-provider.patch -whitespace
 patches/xboxrecomp-local-runtime.patch -whitespace
 xbox/third_party/castlevania-cod-pc/** -whitespace
+xbox/noble/sdk-patches/*.patch text eol=lf -whitespace

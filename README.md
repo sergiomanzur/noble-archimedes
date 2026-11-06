@@ -1,6 +1,6 @@
 # Noble Archimedes
 
-**Latest beta: [v0.9.3b](https://github.com/sergiomanzur/noble-archimedes/releases/tag/v0.9.3b).** This graphics hotfix targets stretched streaks on the title screen and during gameplay. It includes the in-game cursor fix and independent right-stick camera inversion, including **Invert camera stick Y** for up and down. See [modern PC controls](docs/MODERN_PC_CONTROLS.md) and the [changelog](CHANGELOG.md). The Windows download uses the USA Xbox release and compiles the game locally on first run. The release includes a companion source archive and SHA-256 checksums.
+**Latest beta: [v0.9.4b](https://github.com/sergiomanzur/noble-archimedes/releases/tag/v0.9.4b).** First person now follows Hector’s live position while running. The game hides the arrow inside its window and shows a centered dot while mouse look is captured. Right-stick inversion is available in the Camera tab. See [modern PC controls](docs/MODERN_PC_CONTROLS.md) and the [changelog](CHANGELOG.md). The Windows download uses the USA Xbox release and compiles the game locally on first run. The release includes a companion source archive and SHA-256 checksums.
 
 <img src="assets/noble/noble-icon.png" width="112" alt="Original Noble Archimedes astrolabe emblem">
 

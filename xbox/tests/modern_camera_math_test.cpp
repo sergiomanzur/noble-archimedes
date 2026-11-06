@@ -73,13 +73,19 @@ void TestOrbitPosition() {
 }
 
 void TestFirstPerson() {
-    const float target[3] = {0, 0, 0};
-    const float forward[3] = {0, 0, 1};
-    const float up[3] = {0, -1, 0};
-    float out[3];
-    modern::math::FirstPersonPosition(target, forward, up, 0, 2, out);
-    Check(Near(out[0], 0) && Near(out[1], 2) && Near(out[2], 0),
-          "first person subtracts the title's floor-facing up vector");
+    const float standing[3] = {200, 0, -1000};
+    const float running[3] = {200, -25, -500};
+    float eye[3], running_eye[3];
+    modern::math::FirstPersonPosition(standing, 0, 0, eye);
+    modern::math::FirstPersonPosition(running, 0, 0, running_eye);
+    Check(eye[1] < standing[1] && eye[2] > standing[2], "default eye is above and ahead of Hector");
+    for (int axis = 0; axis < 3; ++axis)
+        Check(Near(running_eye[axis] - eye[axis], running[axis] - standing[axis]),
+              "eye follows the current player pose without lag");
+    modern::math::FirstPersonPosition(running, modern::math::kPi / 2, 50, running_eye);
+    Check(Near(running_eye[1], running[1] + eye[1] - standing[1]) &&
+              Near(running_eye[0] - running[0], eye[2] - standing[2] + 50),
+          "turning rotates forward clearance and the extra offset without moving the eye line");
 }
 
 }  // namespace

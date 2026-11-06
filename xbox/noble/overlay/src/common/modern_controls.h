@@ -28,6 +28,7 @@ void SaveSettings(void* table);
 void Frame(bool focused, bool menu_open, bool scripted, uint32_t frame);
 // The settings menu can be opened without a pad read; release capture at once.
 void SetMenuOpen(bool open);
+bool MouseCaptured();
 
 // Adds the modern mouse buttons and aim behaviour to the pad the game is
 // about to read. Call after the keyboard mapping; scripted runs skip it.
@@ -44,7 +45,7 @@ bool DrawSettings();
 void ResetDefaults();
 void CycleCameraMode();
 void ToggleMouseCapture();
-// Restores the OS cursor if the game closes while the mouse is captured.
+// Releases gameplay capture when the game closes.
 void Shutdown();
 
 int GetCameraMode();

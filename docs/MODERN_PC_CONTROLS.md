@@ -57,10 +57,7 @@ one to use the title's original inverted stick on that axis.
 
 The cursor is captured only while the game is in normal gameplay and the game
 window has focus. Opening the F10 menu, Alt-Tabbing, losing focus, entering a
-movie or cutscene, and pressing **F6** all release it. While captured, the
-cursor is hidden and re-hidden every frame so the title or ImGui cannot leave a
-visible arrow parked at the screen centre. The OS cursor is restored on normal
-exit through an `atexit` handler.
+movie or cutscene, and pressing **F6** all release it. A small centered dot appears during capture. Inside the game window, the system arrow is hidden, including when gameplay capture is off. The normal pointer remains available outside the game client.
 
 Mouse travel changes the camera angle once and directly. Stopping the mouse
 stops the camera immediately; there is no residual stick value or continued
@@ -89,12 +86,10 @@ launcher save.
 | `modern_invert_stick_y` | `true` | Correct the title's inverted controller camera Y |
 | `modern_shoulder_offset` | `120` | Guest units to the right of the safe camera line |
 | `modern_camera_distance` | `620` | Guest units from Hector in over-the-shoulder mode |
-| `modern_first_person_offset` | `0` | Optional forward offset from Hector's centre |
+| `modern_first_person_offset` | `0` | Extra forward distance beyond the default head clearance |
 | `modern_mouse_capture` | `true` | Capture the mouse during gameplay |
 
-The first-person eye height is a fixed 80 guest units above the title's camera
-target. Shoulder offset is reduced automatically when the original camera is
-close to a wall.
+First person follows Hector’s current position with a fixed eye height and forward clearance. Looking up or down rotates the view without moving the eye point. Over-the-shoulder offset decreases when the original camera is close to a wall.
 
 ## Scripted and recorded input
 
@@ -111,12 +106,9 @@ still renders normally, so a test that needs the original camera should set
 - A fresh `newgame.json` cvtest run passes all seven steps with the new camera
   active.
 - Manual checks: F10 Camera tab, F5 with the window focused, F6 release and
-  recapture, Alt-Tab release, and the cursor returning after exit.
+  recapture, and Alt-Tab release.
 
-First-person mode is intentionally a camera mode, not a separate character
-controller. Hector's model is not render-hidden; the eye point is placed at the
-camera target so the body does not fill the view. In-engine movies, menus and
-the title screen still use the original camera.
+In-engine movies, menus and the title screen still use the original camera.
 
 ## Known limits
 

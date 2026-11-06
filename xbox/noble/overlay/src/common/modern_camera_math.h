@@ -51,11 +51,13 @@ inline void OrbitPosition(const float target[3], const float forward[3], const f
     out[2] = target[2] - forward[2] * distance + right[2] * shoulder;
 }
 
-inline void FirstPersonPosition(const float target[3], const float forward[3], const float up[3],
-                                float forward_offset, float eye_height, float out[3]) {
-    out[0] = target[0] + forward[0] * forward_offset - up[0] * eye_height;
-    out[1] = target[1] + forward[1] * forward_offset - up[1] * eye_height;
-    out[2] = target[2] + forward[2] * forward_offset - up[2] * eye_height;
+inline void FirstPersonPosition(const float player[3], float yaw, float forward_offset, float out[3]) {
+    constexpr float eye_height = 330.0f;
+    constexpr float head_clearance = 120.0f;
+    const float distance = head_clearance + forward_offset;
+    out[0] = player[0] + std::sin(yaw) * distance;
+    out[1] = player[1] - eye_height;
+    out[2] = player[2] + std::cos(yaw) * distance;
 }
 
 // Column-major memory layout used by the title: strided rows of the rotation

@@ -45,13 +45,11 @@ namespace {
 constexpr uint32_t kSceneMask = 0x28000;  // story scene or room change (telemetry.cpp)
 constexpr float kMinDistance = 120.0f;
 constexpr float kMaxPitch = 1.10f;  // radians above/below horizontal
-constexpr float kFirstPersonEyeHeight = 80.0f;
 constexpr float kStickRadiansPerFrame = 0.025f;  // gamepad look, ~1.5 rad/s at 60 Hz
 
 std::mutex g_input_mutex;
 std::mutex g_hotkey_mutex;
-bool g_cursor_hidden = false;
-bool g_captured = false;
+std::atomic<bool> g_captured{false};
 bool g_first_motion = true;
 uint32_t g_last_frame = ~0u;
 std::atomic<float> g_camera_yaw{0.0f};   // absolute view heading, 0 = +z
@@ -90,12 +88,13 @@ bool CameraSpecial(uint8_t* base) {
     return callback == cv::kTitleCallback || callback == cv::kDebugCallback;
 }
 
-bool GameplayCamera(uint8_t* base, float* player_yaw = nullptr) {
+bool GameplayCamera(uint8_t* base, float* player_position = nullptr, float* player_yaw = nullptr) {
     float pos[3], yaw = 0;
     if (!PlayerPose(pos, yaw)) return false;
     if (SceneWord() & kSceneMask) return false;
     if (PauseMenuUp() || ModalUp()) return false;
     if (CameraSpecial(base)) return false;
+    if (player_position) std::memcpy(player_position, pos, sizeof pos);
     if (player_yaw) *player_yaw = yaw;
     return true;
 }
@@ -113,45 +112,14 @@ void FaceHeading(uint8_t* base, float yaw) {
     std::memcpy(base + yaw_address, &yaw, sizeof yaw);
 }
 
-void ShowCursorOnce() {
-    if (g_cursor_hidden) {
-        while (ShowCursor(TRUE) < 0) {
-        }
-        g_cursor_hidden = false;
-    }
-    SetCursor(LoadCursorW(nullptr, IDC_ARROW));
-}
-
-void HideCursorOnce() {
-    while (ShowCursor(FALSE) >= 0) {
-    }
-    g_cursor_hidden = true;
-    SetCursor(nullptr);
-}
-
-// Some title/ImGui window messages reset the cursor class after the first
-// hide. Re-assert the hidden state whenever the cursor is captured.
-void EnsureCursorHidden() {
-    CURSORINFO info{};
-    info.cbSize = sizeof(info);
-    if (GetCursorInfo(&info) && (info.flags & CURSOR_SHOWING)) {
-        while (ShowCursor(FALSE) >= 0) {
-        }
-    }
-    g_cursor_hidden = true;
-    SetCursor(nullptr);
-}
-
 void CaptureWindow(HWND window) {
     if (!window || !IsWindow(window) || !IsWindowVisible(window)) return;
     RECT client{};
-    if (!GetClientRect(window, &client)) return;
+    if (!GetClientRect(window, &client) || client.right <= 1 || client.bottom <= 1) return;
     POINT center{client.right / 2, client.bottom / 2};
-    ClientToScreen(window, &center);
-    SetCursorPos(center.x, center.y);
+    if (!ClientToScreen(window, &center) || !SetCursorPos(center.x, center.y)) return;
     g_first_motion = true;
     g_captured = true;
-    HideCursorOnce();
 }
 
 void ReleaseCapture() {
@@ -160,7 +128,6 @@ void ReleaseCapture() {
         g_first_motion = true;
         g_aiming = false;
     }
-    ShowCursorOnce();
 }
 
 void ReadRelativeMouse(HWND window, float& dx, float& dy) {
@@ -179,7 +146,6 @@ void ReadRelativeMouse(HWND window, float& dx, float& dy) {
     }
     g_first_motion = false;
     if (cursor.x != center.x || cursor.y != center.y) SetCursorPos(center.x, center.y);
-    EnsureCursorHidden();
 }
 
 void ModeChanged() {
@@ -266,6 +232,7 @@ void Frame(bool focused, bool menu_open, bool scripted, uint32_t frame) {
         return;
     }
     if (!g_captured) CaptureWindow(window);
+    if (!g_captured) return;
     if (frame == g_last_frame) return;
     g_last_frame = frame;
 
@@ -325,6 +292,7 @@ void ApplyPad(input::Pad& pad) {
     }
     g_move_amount = std::max(std::fabs(static_cast<float>(pad.lx)), std::fabs(static_cast<float>(pad.ly))) /
                     32767.0f;
+    if (!g_captured) return;
     // The guest's analog array is A, B, X, Y, black, white, LT, RT.
     if (GetAsyncKeyState(VK_LBUTTON) & 0x8000) pad.analog[2] = 0xFF;   // X: attack
     if (GetAsyncKeyState(VK_MBUTTON) & 0x8000) pad.analog[3] = 0xFF;   // Y: special
@@ -344,8 +312,8 @@ void AfterCameraUpdate(uint8_t* base) {
     // A story scene, room change or special view should reset the absolute
     // heading when normal play resumes. Menus and message boxes do not.
     if ((SceneWord() & kSceneMask) || CameraSpecial(base)) g_camera_need_init = true;
-    float player_yaw = 0;
-    if (!GameplayCamera(base, &player_yaw)) return;
+    float player_position[3], player_yaw = 0;
+    if (!GameplayCamera(base, player_position, &player_yaw)) return;
 
     uint32_t view = 0;
     if (!ReadU32(base, cv::kCameraView, view) || !view) return;
@@ -396,10 +364,9 @@ void AfterCameraUpdate(uint8_t* base) {
 
     float next_position[4];
     if (mode == kFirstPerson) {
-        // The title's view up vector points toward the floor in this
-        // coordinate system, so subtracting it raises the eye line.
-        math::FirstPersonPosition(target, forward, up, g_first_person.load(), kFirstPersonEyeHeight,
-                                  next_position);
+        // The title's follow target trails Hector during a run. Anchor to his
+        // live position and keep head clearance independent of look pitch.
+        math::FirstPersonPosition(player_position, yaw, g_first_person.load(), next_position);
     } else {
         const bool aiming = g_aiming.load();
         float wanted = std::min(g_distance.load(), base_distance);
@@ -422,6 +389,8 @@ void SetMenuOpen(bool open) {
     ReleaseCapture();
 }
 
+bool MouseCaptured() { return g_captured.load(); }
+
 void CycleCameraMode() {
     int next = (g_mode.load() + 1) % 3;
     g_mode = next;
@@ -439,7 +408,6 @@ void ToggleMouseCapture() {
 void Shutdown() {
     std::lock_guard lock(g_input_mutex);
     ReleaseCapture();
-    ShowCursorOnce();
 }
 
 void ResetDefaults() {

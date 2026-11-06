@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.9.4b — First-person camera and mouse reticle (2026-11-06)
+
+- Anchor the first-person camera to Hector’s live position so the third-person follow target no longer drifts behind his head during a run. Look pitch no longer moves the camera’s eye position.
+- Hide the system cursor inside the game and show a small centered dot only while gameplay captures the mouse.
+
 ## v0.9.3b — Graphics hotfix (2026-11-06)
 
 - Copy the Xbox game's completed frame using screen pixel coordinates and explicit base-level sampling. This removes derivative-based sampling from the full-frame pass shared by the title screen and gameplay to address reports of stretched streaks.

@@ -292,6 +292,8 @@ void MenuWindow() {
     std::lock_guard lock(app::UiLock());
     float scale = std::max(1.0f, app::Desktop().height / 1080.0f);
     ImGuiIO& io = ImGui::GetIO();
+    // The game client owns its cursor through WM_SETCURSOR.
+    io.ConfigFlags |= ImGuiConfigFlags_NoMouseCursorChange;
     io.Fonts->Clear();
     if (!io.Fonts->AddFontFromFileTTF("C:\\Windows\\Fonts\\segoeui.ttf", 20.0f * scale)) {
         ImFontConfig cfg;
@@ -306,7 +308,13 @@ void MenuWindow() {
 // the window in menu mode); PollKeys opens and closes the menu
 extern std::atomic<bool> g_closing;  // keyboard.cpp
 
-bool MenuMessage(void*, uint32_t msg, uintptr_t wp, intptr_t, intptr_t* result) {
+bool MenuMessage(void*, uint32_t msg, uintptr_t wp, intptr_t lp, intptr_t* result) {
+    if (msg == WM_SETCURSOR && LOWORD(lp) == HTCLIENT) {
+        SetCursor(nullptr);
+        *result = TRUE;
+        return true;
+    }
+    if (msg == WM_ACTIVATE && LOWORD(wp) == WA_INACTIVE) modern::SetMenuOpen(true);
     if (msg == WM_CLOSE) {
         g_closing = true;
         modern::Shutdown();
@@ -332,8 +340,16 @@ void MenuUi(double fps) {
         dl->AddText({at.x + 2, at.y + 2}, IM_COL32(0, 0, 0, 200), text);
         dl->AddText(at, IM_COL32(255, 230, 140, 255), text);
     }
-    io.MouseDrawCursor = false;
-    if (!g_open) return;
+    if (!g_open) {
+        if (modern::MouseCaptured() && GetForegroundWindow() == static_cast<HWND>(app::Window())) {
+            const ImVec2 center{io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f};
+            const float radius = std::max(2.0f, io.DisplaySize.y / 540.0f);
+            ImDrawList* overlay = ImGui::GetForegroundDrawList();
+            overlay->AddCircleFilled(center, radius + 1.0f, IM_COL32(0, 0, 0, 220));
+            overlay->AddCircleFilled(center, radius, IM_COL32(255, 255, 255, 245));
+        }
+        return;
+    }
 
     ImVec2 size{io.DisplaySize.y * 0.75f, io.DisplaySize.y * 0.55f};
     ImGui::SetNextWindowPos({io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f}, ImGuiCond_Always, {0.5f, 0.5f});

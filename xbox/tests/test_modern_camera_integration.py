@@ -56,11 +56,12 @@ class ModernCameraIntegrationTest(unittest.TestCase):
         self.assertIn("g_stick_invert_x = true;", controls)
         self.assertIn("g_stick_invert_y = true;", controls)
 
-    def test_cursor_is_reasserted_every_captured_frame(self):
-        controls = read("common/modern_controls.cpp")
-        self.assertIn("EnsureCursorHidden();", controls)
-        self.assertIn("CURSOR_SHOWING", controls)
-        self.assertIn("SetCursor(nullptr);", controls)
+    def test_game_window_owns_cursor_and_draws_reticle_when_captured(self):
+        menu = read("common/menu.cpp")
+        self.assertIn("ImGuiConfigFlags_NoMouseCursorChange", menu)
+        self.assertIn("msg == WM_SETCURSOR && LOWORD(lp) == HTCLIENT", menu)
+        self.assertIn("SetCursor(nullptr);", menu)
+        self.assertIn("modern::MouseCaptured() && GetForegroundWindow()", menu)
 
     def test_view_matrix_translation_uses_column_major_rows(self):
         math = read("common/modern_camera_math.h")
@@ -84,10 +85,10 @@ class ModernCameraIntegrationTest(unittest.TestCase):
         self.assertIn("!scripted", controls)
         self.assertIn("ReleaseCapture();", controls)
 
-    def test_mouse_cursor_is_restored_at_exit(self):
+    def test_mouse_capture_is_released_at_exit(self):
         controls = read("common/modern_controls.cpp")
         self.assertIn("std::atexit(Shutdown);", controls)
-        self.assertIn("ShowCursor(TRUE)", controls)
+        self.assertNotIn("ShowCursor(", controls)
 
 
 if __name__ == "__main__":

@@ -1,6 +1,6 @@
 # Noble Archimedes
 
-**Latest beta: [v0.9.1b](https://github.com/sergiomanzur/noble-archimedes/releases/tag/v0.9.1b).** The Windows download is USA Xbox only and compiles the game locally on first run. This build adds direct mouse look and over-the-shoulder/first-person cameras; see [modern PC controls](docs/MODERN_PC_CONTROLS.md). A companion source archive and SHA-256 checksums accompany the release.
+**Latest beta: [v0.9.2b](https://github.com/sergiomanzur/noble-archimedes/releases/tag/v0.9.2b).** The Windows download is USA Xbox only and compiles the game locally on first run. This build adds direct mouse look and over-the-shoulder/first-person cameras; see [modern PC controls](docs/MODERN_PC_CONTROLS.md). A companion source archive and SHA-256 checksums accompany the release.
 
 <img src="assets/noble/noble-icon.png" width="112" alt="Original Noble Archimedes astrolabe emblem">
 

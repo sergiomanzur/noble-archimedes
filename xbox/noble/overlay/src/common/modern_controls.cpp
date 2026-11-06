@@ -63,8 +63,10 @@ std::atomic<bool> g_aiming{false};
 
 std::atomic<int> g_mode{kOverShoulder};
 std::atomic<float> g_sensitivity{0.15f};  // degrees per mouse pixel
-std::atomic<bool> g_invert_x{false};
-std::atomic<bool> g_invert_y{false};
+std::atomic<bool> g_invert_x{false};      // mouse only
+std::atomic<bool> g_invert_y{false};      // mouse only
+std::atomic<bool> g_stick_invert_x{true}; // correct the title's inverted camera stick
+std::atomic<bool> g_stick_invert_y{true};
 std::atomic<float> g_shoulder{120.0f};    // guest units to the right
 std::atomic<float> g_distance{620.0f};    // camera distance from Hector in OTS mode
 std::atomic<float> g_first_person{0.0f};  // optional forward offset in FPS mode
@@ -117,14 +119,27 @@ void ShowCursorOnce() {
         }
         g_cursor_hidden = false;
     }
+    SetCursor(LoadCursorW(nullptr, IDC_ARROW));
 }
 
 void HideCursorOnce() {
-    if (!g_cursor_hidden) {
+    while (ShowCursor(FALSE) >= 0) {
+    }
+    g_cursor_hidden = true;
+    SetCursor(nullptr);
+}
+
+// Some title/ImGui window messages reset the cursor class after the first
+// hide. Re-assert the hidden state whenever the cursor is captured.
+void EnsureCursorHidden() {
+    CURSORINFO info{};
+    info.cbSize = sizeof(info);
+    if (GetCursorInfo(&info) && (info.flags & CURSOR_SHOWING)) {
         while (ShowCursor(FALSE) >= 0) {
         }
-        g_cursor_hidden = true;
     }
+    g_cursor_hidden = true;
+    SetCursor(nullptr);
 }
 
 void CaptureWindow(HWND window) {
@@ -164,6 +179,7 @@ void ReadRelativeMouse(HWND window, float& dx, float& dy) {
     }
     g_first_motion = false;
     if (cursor.x != center.x || cursor.y != center.y) SetCursorPos(center.x, center.y);
+    EnsureCursorHidden();
 }
 
 void ModeChanged() {
@@ -199,6 +215,8 @@ void LoadSettings(const void* table) {
     g_sensitivity = Clamp(t["modern_mouse_sensitivity"].value_or(g_sensitivity.load()), 0.01f, 1.0f);
     g_invert_x = t["modern_invert_x"].value_or(g_invert_x.load());
     g_invert_y = t["modern_invert_y"].value_or(g_invert_y.load());
+    g_stick_invert_x = t["modern_invert_stick_x"].value_or(g_stick_invert_x.load());
+    g_stick_invert_y = t["modern_invert_stick_y"].value_or(g_stick_invert_y.load());
     g_shoulder = Clamp(t["modern_shoulder_offset"].value_or(g_shoulder.load()), 0.0f, 350.0f);
     g_distance = Clamp(t["modern_camera_distance"].value_or(g_distance.load()), kMinDistance, 1600.0f);
     g_first_person = Clamp(t["modern_first_person_offset"].value_or(g_first_person.load()), 0.0f, 400.0f);
@@ -212,6 +230,8 @@ void SaveSettings(void* table) {
     t.insert_or_assign("modern_mouse_sensitivity", double(g_sensitivity.load()));
     t.insert_or_assign("modern_invert_x", g_invert_x.load());
     t.insert_or_assign("modern_invert_y", g_invert_y.load());
+    t.insert_or_assign("modern_invert_stick_x", g_stick_invert_x.load());
+    t.insert_or_assign("modern_invert_stick_y", g_stick_invert_y.load());
     t.insert_or_assign("modern_shoulder_offset", double(g_shoulder.load()));
     t.insert_or_assign("modern_camera_distance", double(g_distance.load()));
     t.insert_or_assign("modern_first_person_offset", double(g_first_person.load()));
@@ -274,31 +294,34 @@ void ApplyPad(input::Pad& pad) {
     // heading instead of letting the title camera's own follow change it.
     uint32_t frame = d3d::Swaps();
     static uint32_t stick_frame = ~0u;
-    if (frame != stick_frame) {
+    if (g_mode.load() == kClassic) {
+        // The title's raw camera stick is inverted. These default-on flips
+        // correct it without changing the original camera itself.
+        if (g_stick_invert_x.load()) pad.rx = static_cast<int16_t>(-pad.rx);
+        if (g_stick_invert_y.load()) pad.ry = static_cast<int16_t>(-pad.ry);
+    } else if (frame != stick_frame) {
         stick_frame = frame;
-        if (g_mode.load() != kClassic) {
-            if (pad.rx != 0 || pad.ry != 0) {
-                float yaw = g_camera_yaw.load() +
-                            (pad.rx / 32767.0f) * kStickRadiansPerFrame * (g_invert_x.load() ? -1.0f : 1.0f);
-                while (yaw > math::kPi) yaw -= 2.0f * math::kPi;
-                while (yaw < -math::kPi) yaw += 2.0f * math::kPi;
-                float pitch = g_camera_pitch.load() -
-                              (pad.ry / 32767.0f) * kStickRadiansPerFrame * (g_invert_y.load() ? -1.0f : 1.0f);
-                g_camera_yaw = yaw;
-                g_camera_pitch = Clamp(pitch, -kMaxPitch, kMaxPitch);
-            }
-
-            // Steer the title camera toward the host heading. Movement is
-            // relative to this camera, so keeping it aligned makes W follow
-            // the mouse without bypassing the title's own movement rules.
-            float base = g_base_heading.load();
-            float error = g_camera_yaw.load() - base;
-            while (error > math::kPi) error -= 2.0f * math::kPi;
-            while (error < -math::kPi) error += 2.0f * math::kPi;
-            float command = Clamp(error * 2.0f, -1.0f, 1.0f);
-            pad.rx = static_cast<int16_t>(Clamp(-command, -1.0f, 1.0f) * 32767.0f);
-            pad.ry = 0;
+        if (pad.rx != 0 || pad.ry != 0) {
+            float rx = (pad.rx / 32767.0f) * (g_stick_invert_x.load() ? 1.0f : -1.0f);
+            float ry = (pad.ry / 32767.0f) * (g_stick_invert_y.load() ? 1.0f : -1.0f);
+            float yaw = g_camera_yaw.load() + rx * kStickRadiansPerFrame;
+            while (yaw > math::kPi) yaw -= 2.0f * math::kPi;
+            while (yaw < -math::kPi) yaw += 2.0f * math::kPi;
+            float pitch = g_camera_pitch.load() - ry * kStickRadiansPerFrame;
+            g_camera_yaw = yaw;
+            g_camera_pitch = Clamp(pitch, -kMaxPitch, kMaxPitch);
         }
+
+        // Steer the title camera toward the host heading. Movement is
+        // relative to this camera, so keeping it aligned makes W follow
+        // the mouse without bypassing the title's own movement rules.
+        float base = g_base_heading.load();
+        float error = g_camera_yaw.load() - base;
+        while (error > math::kPi) error -= 2.0f * math::kPi;
+        while (error < -math::kPi) error += 2.0f * math::kPi;
+        float command = Clamp(error * 2.0f, -1.0f, 1.0f);
+        pad.rx = static_cast<int16_t>(Clamp(-command, -1.0f, 1.0f) * 32767.0f);
+        pad.ry = 0;
     }
     g_move_amount = std::max(std::fabs(static_cast<float>(pad.lx)), std::fabs(static_cast<float>(pad.ly))) /
                     32767.0f;
@@ -424,6 +447,8 @@ void ResetDefaults() {
     g_sensitivity = 0.15f;
     g_invert_x = false;
     g_invert_y = false;
+    g_stick_invert_x = true;
+    g_stick_invert_y = true;
     g_shoulder = 120.0f;
     g_distance = 620.0f;
     g_first_person = 0.0f;
@@ -501,6 +526,19 @@ bool DrawSettings() {
     bool invert_y = g_invert_y.load();
     if (ImGui::Checkbox("Invert mouse Y", &invert_y)) {
         SetInvertY(invert_y);
+        changed = true;
+    }
+    ImGui::Spacing();
+    ImGui::TextDisabled("Controller camera (the title's default is inverted):");
+    bool stick_x = g_stick_invert_x.load();
+    if (ImGui::Checkbox("Invert camera stick X", &stick_x)) {
+        g_stick_invert_x = stick_x;
+        changed = true;
+    }
+    ImGui::SameLine();
+    bool stick_y = g_stick_invert_y.load();
+    if (ImGui::Checkbox("Invert camera stick Y", &stick_y)) {
+        g_stick_invert_y = stick_y;
         changed = true;
     }
     bool capture = g_capture.load();

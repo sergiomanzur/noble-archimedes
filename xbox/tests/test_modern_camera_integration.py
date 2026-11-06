@@ -47,10 +47,20 @@ class ModernCameraIntegrationTest(unittest.TestCase):
             "modern_camera_distance",
             "modern_first_person_offset",
             "modern_mouse_capture",
+            "modern_invert_stick_x",
+            "modern_invert_stick_y",
         ):
             self.assertIn(f'"{key}"', controls)
         self.assertIn("g_mode = kOverShoulder;", controls)
         self.assertIn("g_capture = true;", controls)
+        self.assertIn("g_stick_invert_x = true;", controls)
+        self.assertIn("g_stick_invert_y = true;", controls)
+
+    def test_cursor_is_reasserted_every_captured_frame(self):
+        controls = read("common/modern_controls.cpp")
+        self.assertIn("EnsureCursorHidden();", controls)
+        self.assertIn("CURSOR_SHOWING", controls)
+        self.assertIn("SetCursor(nullptr);", controls)
 
     def test_view_matrix_translation_uses_column_major_rows(self):
         math = read("common/modern_camera_math.h")

@@ -48,12 +48,19 @@ A connected controller still works alongside the keyboard and mouse. The
 mouse buttons are additions, not replacements: the existing keyboard and pad
 bindings remain available.
 
+The title's controller camera is inverted by default. Two Camera-tab options,
+**Invert camera stick X** and **Invert camera stick Y**, are enabled by default
+to correct it. They affect both Classic and direct-look modes; uncheck either
+one to use the title's original inverted stick on that axis.
+
 ## Mouse capture
 
 The cursor is captured only while the game is in normal gameplay and the game
 window has focus. Opening the F10 menu, Alt-Tabbing, losing focus, entering a
-movie or cutscene, and pressing **F6** all release it. The OS cursor is
-restored on normal exit through an `atexit` handler.
+movie or cutscene, and pressing **F6** all release it. While captured, the
+cursor is hidden and re-hidden every frame so the title or ImGui cannot leave a
+visible arrow parked at the screen centre. The OS cursor is restored on normal
+exit through an `atexit` handler.
 
 Mouse travel changes the camera angle once and directly. Stopping the mouse
 stops the camera immediately; there is no residual stick value or continued
@@ -76,8 +83,10 @@ launcher save.
 |---|---:|---|
 | `modern_camera_mode` | `1` | `0` Classic, `1` over-the-shoulder, `2` first person |
 | `modern_mouse_sensitivity` | `0.15` | Degrees of camera travel per mouse pixel |
-| `modern_invert_x` | `false` | Flip horizontal look |
-| `modern_invert_y` | `false` | Flip vertical look |
+| `modern_invert_x` | `false` | Flip horizontal mouse look |
+| `modern_invert_y` | `false` | Flip vertical mouse look |
+| `modern_invert_stick_x` | `true` | Correct the title's inverted controller camera X |
+| `modern_invert_stick_y` | `true` | Correct the title's inverted controller camera Y |
 | `modern_shoulder_offset` | `120` | Guest units to the right of the safe camera line |
 | `modern_camera_distance` | `620` | Guest units from Hector in over-the-shoulder mode |
 | `modern_first_person_offset` | `0` | Optional forward offset from Hector's centre |

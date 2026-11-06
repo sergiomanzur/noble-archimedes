@@ -1,6 +1,6 @@
 # Publication scope
 
-For v0.9.1b the existing sanitized history is retained. The Xbox donor snapshot,
+For v0.9.2b the existing sanitized history is retained. The Xbox donor snapshot,
 Noble branding overlay, generic host changes, license texts and original
 `assets/noble/` artwork/icon/synthetic audio are public inputs. Those original
 assets are the explicit exception to the historical blanket media exclusion

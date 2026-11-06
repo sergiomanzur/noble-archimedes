@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.9.2b — Cursor and camera-stick fixes (2026-11-06)
+
+- Re-assert the hidden cursor every captured frame and restore the normal arrow when capture is released, preventing a visible cursor from remaining parked at the screen centre.
+- Add separate **Invert camera stick X** and **Invert camera stick Y** options, enabled by default to correct the title's inverted controller camera. They apply in both Classic and direct-look modes.
+- Keep mouse inversion independent from controller-stick inversion.
+- Persist the new options in `castlevania.toml` as `modern_invert_stick_x` and `modern_invert_stick_y`.
+
 ## v0.9.1b — Modern PC controls beta (2026-11-02)
 
 - Add direct relative mouse look to the primary Xbox D3D12 build, with automatic capture during gameplay, release on focus loss and the F10 menu, and an F6 override.

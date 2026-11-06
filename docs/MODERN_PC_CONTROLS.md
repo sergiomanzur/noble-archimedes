@@ -12,7 +12,7 @@ Open the in-game settings with **F10** and use the **Camera** tab, or press
 
 | Mode | Behaviour |
 |---|---|
-| Classic | The original follow camera, unchanged. Free mouse look is not applied in this mode. |
+| Classic | The original follow camera. Captured mouse motion feeds its orbit controls, with separate mouse and right-stick inversion. |
 | Over-the-shoulder (default) | Orbits the camera around Hector at the current distance, then offsets it to the right. This is the RE2 Remake-style view. |
 | First person | Places the camera at Hector's eye line. No extra collision probe is needed because the player's own collision keeps the eye point out of walls. |
 
@@ -117,8 +117,7 @@ In-engine movies, menus and the title screen still use the original camera.
   radius. The base distance and shoulder offset were collision-safe for the
   original heading, but a large free-look rotation near a wall can still clip.
   Lower `modern_camera_distance` or `modern_shoulder_offset` in tight rooms.
-- Classic mode deliberately keeps the original camera and does not apply the
-  free-look offset. Switch to over-the-shoulder or first person for direct
+- Classic uses the title's orbit speed and pitch limits. Switch to over-the-shoulder or first person for direct
   mouse look.
 - There is one sensitivity for both axes; per-axis tuning and a separate
   vertical scale are not exposed yet.

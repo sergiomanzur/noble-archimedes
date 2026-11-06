@@ -53,13 +53,42 @@ inline void OrbitPosition(const float target[3], const float forward[3], const f
     out[2] = target[2] - forward[2] * distance + right[2] * shoulder;
 }
 
-inline void FirstPersonPosition(const float player[3], float yaw, float forward_offset, float out[3]) {
+inline constexpr float kHeadClearance = 120.0f;
+
+inline float EnemyEyeLimit(const float player[3], const float enemy[3], float yaw, float distance) {
+    const float dx = enemy[0] - player[0], dz = enemy[2] - player[2];
+    const float s = std::sin(yaw), c = std::cos(yaw);
+    const float ahead = dx * s + dz * c;
+    const float side = dx * c - dz * s;
+    if (!std::isfinite(enemy[1]) || std::fabs(enemy[1] - player[1]) > 320.0f ||
+        ahead < 0.0f || std::fabs(side) > 145.0f)
+        return distance;
+    // Leave space for the enemy model and the guest camera's near plane.
+    return std::min(distance, std::max(-105.0f, ahead - 245.0f));
+}
+
+inline void FirstPersonEye(const float player[3], float yaw, float distance, float out[3]) {
     constexpr float eye_height = 330.0f;
-    constexpr float head_clearance = 120.0f;
-    const float distance = head_clearance + forward_offset;
     out[0] = player[0] + std::sin(yaw) * distance;
-    out[1] = player[1] - eye_height;
+    // As the eye backs into Hector's silhouette, lift it above his head.
+    out[1] = player[1] - eye_height - std::max(0.0f, 50.0f - distance) * 0.75f;
     out[2] = player[2] + std::cos(yaw) * distance;
+}
+
+inline void FirstPersonPosition(const float player[3], float yaw, float forward_offset, float out[3]) {
+    FirstPersonEye(player, yaw, kHeadClearance + forward_offset, out);
+}
+
+inline int16_t InvertStick(int16_t value) {
+    return static_cast<int16_t>(-std::max<int>(value, -32767));
+}
+
+inline int16_t ClassicAxis(int16_t stick, float mouse, bool invert_stick, bool invert_mouse) {
+    const int16_t native_stick = invert_stick ? InvertStick(stick) : stick;
+    if (mouse == 0.0f) return native_stick;
+    // The title's orbit takes a negative input for the normal positive motion.
+    const float native_mouse = mouse * (invert_mouse ? 32767.0f : -32767.0f);
+    return static_cast<int16_t>(std::clamp(native_stick + native_mouse, -32767.0f, 32767.0f));
 }
 
 // Express movement in the title's follow-camera coordinates. Rotate both axes

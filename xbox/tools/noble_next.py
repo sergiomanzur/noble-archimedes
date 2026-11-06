@@ -118,6 +118,7 @@ def prepare(assets, eu_assets):
     foreach(exe ${CV_RELEASES} NobleArchimedesLauncher)
         target_sources(${exe} PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/noble-icon.rc")
     endforeach()
+    target_link_libraries(NobleArchimedesLauncher PRIVATE winmm)
 endif()
 add_custom_command(TARGET NobleArchimedesLauncher POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_directory "${NOBLE_BRANDING_ASSETS}"
@@ -162,7 +163,11 @@ add_custom_command(TARGET NobleArchimedesLauncher POST_BUILD
         }''')
     launcher = launcher.replace('"NobleArchimedes");\n            float tw', '"Noble Archimedes");\n            float tw')
     launcher = launcher.replace('"NobleArchimedes").x', '"Noble Archimedes").x')
-    write('src/launcher/launcher.cpp', launcher)
+    if os.name == 'nt':
+        for name in ('launcher.cpp', 'words.h'):
+            write('src/launcher/' + name, (OVERLAY / 'src/launcher' / name).read_text(encoding='utf-8'))
+    else:
+        write('src/launcher/launcher.cpp', launcher)
 
     for source, dest in ((assets, PORT / 'assets'), (eu_assets, PORT / 'assets/eu')):
         if not source:

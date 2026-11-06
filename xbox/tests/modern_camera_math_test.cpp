@@ -110,6 +110,32 @@ void TestFirstPersonMovement() {
     Check(x == 32767 && y == 0, "full diagonal rotates without clipping its direction");
 }
 
+void TestEnemyClearanceAndStickLimits() {
+    const float player[3] = {0, 0, 0};
+    const float close[3] = {0, 0, 100};
+    const float behind[3] = {0, 0, -100};
+    const float beside[3] = {200, 0, 100};
+    const float safe = modern::math::EnemyEyeLimit(player, close, 0, 120);
+    float eye[3];
+    modern::math::FirstPersonEye(player, 0, safe, eye);
+    Check(eye[2] < 0 && close[2] - eye[2] > 64 && eye[1] < -330,
+          "eye retracts and lifts when an enemy enters the forward camera space");
+    Check(Near(modern::math::EnemyEyeLimit(player, behind, 0, 120), 120) &&
+              Near(modern::math::EnemyEyeLimit(player, beside, 0, 120), 120),
+          "enemies behind or to the side do not pull back the eye");
+    Check(modern::math::InvertStick(-32768) == 32767 &&
+              modern::math::InvertStick(32767) == -32767 &&
+              modern::math::InvertStick(0) == 0,
+          "inversion reverses both full-stick limits and preserves neutral");
+    using modern::math::ClassicAxis;
+    Check(ClassicAxis(0, 0.5f, false, false) < 0 && ClassicAxis(0, 0.5f, true, false) < 0 &&
+              ClassicAxis(0, 0.5f, false, true) > 0 && ClassicAxis(0, 0.5f, true, true) > 0,
+          "only the mouse inversion changes mouse direction");
+    Check(ClassicAxis(-32768, 0, true, true) == 32767 &&
+              ClassicAxis(-32768, 0, true, false) == 32767,
+          "mouse inversion does not change full-stick input");
+}
+
 }  // namespace
 
 int main() {
@@ -118,6 +144,7 @@ int main() {
     TestOrbitPosition();
     TestFirstPerson();
     TestFirstPersonMovement();
+    TestEnemyClearanceAndStickLimits();
     if (failures) {
         std::fprintf(stderr, "modern camera math: %d failure(s)\n", failures);
         return 1;

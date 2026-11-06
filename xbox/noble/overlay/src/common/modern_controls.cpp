@@ -22,6 +22,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <mutex>
+#include <vector>
 
 #include <toml++/toml.hpp>
 #include <imgui.h>
@@ -38,6 +39,13 @@ bool PlayerPose(float pos[3], float& yaw);  // telemetry.cpp
 bool PauseMenuUp();                         // telemetry.cpp
 bool ModalUp();                             // telemetry.cpp
 uint32_t SceneWord();                       // telemetry.cpp
+struct EnemyInfo {
+    uint32_t actor;
+    uint16_t type;
+    float hp;
+    float pos[3];
+};
+std::vector<EnemyInfo> Enemies();            // game/enemies.cpp
 
 namespace modern {
 namespace {
@@ -51,6 +59,7 @@ std::mutex g_input_mutex;
 std::mutex g_hotkey_mutex;
 std::atomic<bool> g_captured{false};
 bool g_first_motion = true;
+float g_classic_mouse_x = 0.0f, g_classic_mouse_y = 0.0f;
 uint32_t g_last_frame = ~0u;
 std::atomic<float> g_camera_yaw{0.0f};   // absolute view heading, 0 = +z
 std::atomic<float> g_camera_pitch{0.0f}; // positive looks down
@@ -123,6 +132,7 @@ void CaptureWindow(HWND window) {
 }
 
 void ReleaseCapture() {
+    g_classic_mouse_x = g_classic_mouse_y = 0.0f;
     if (g_captured) {
         g_captured = false;
         g_first_motion = true;
@@ -243,6 +253,13 @@ void Frame(bool focused, bool menu_open, bool scripted, uint32_t frame) {
     // Direct look: mouse travel changes the camera angle exactly once. No
     // residual stick value keeps turning after the mouse stops.
     float angular = g_sensitivity.load() * math::kDegToRad;
+    g_aiming = (GetAsyncKeyState(VK_RBUTTON) & 0x8000) != 0;
+    if (g_mode.load() == kClassic) {
+        // Feed relative mouse motion through the game's own orbit controls.
+        g_classic_mouse_x = Clamp(dx * angular / kStickRadiansPerFrame, -1.0f, 1.0f);
+        g_classic_mouse_y = Clamp(-dy * angular / kStickRadiansPerFrame, -1.0f, 1.0f);
+        return;
+    }
     if (dx != 0.0f || dy != 0.0f) {
         float yaw = g_camera_yaw.load() + dx * angular * (g_invert_x.load() ? -1.0f : 1.0f);
         while (yaw > math::kPi) yaw -= 2.0f * math::kPi;
@@ -251,24 +268,24 @@ void Frame(bool focused, bool menu_open, bool scripted, uint32_t frame) {
         g_camera_yaw = yaw;
         g_camera_pitch = Clamp(pitch, -kMaxPitch, kMaxPitch);
     }
-    g_aiming = (GetAsyncKeyState(VK_RBUTTON) & 0x8000) != 0;
 }
 
 void ApplyPad(input::Pad& pad) {
-    if (!g_gameplay.load()) return;
     std::lock_guard lock(g_input_mutex);
     // The title's right stick still works; fold it into the same absolute
     // heading instead of letting the title camera's own follow change it.
     uint32_t frame = d3d::Swaps();
     static uint32_t stick_frame = ~0u;
     const int mode = g_mode.load();
+    if (mode != kClassic && !g_gameplay.load()) return;
     g_move_amount = std::max(std::fabs(static_cast<float>(pad.lx)), std::fabs(static_cast<float>(pad.ly))) /
                     32767.0f;
     if (mode == kClassic) {
         // The title's raw camera stick is inverted. These default-on flips
         // correct it without changing the original camera itself.
-        if (g_stick_invert_x.load()) pad.rx = static_cast<int16_t>(-pad.rx);
-        if (g_stick_invert_y.load()) pad.ry = static_cast<int16_t>(-pad.ry);
+        const bool mouse = g_captured && g_gameplay.load();
+        pad.rx = math::ClassicAxis(pad.rx, mouse ? g_classic_mouse_x : 0.0f, g_stick_invert_x, g_invert_x);
+        pad.ry = math::ClassicAxis(pad.ry, mouse ? g_classic_mouse_y : 0.0f, g_stick_invert_y, g_invert_y);
     } else {
         if (frame != stick_frame && (pad.rx != 0 || pad.ry != 0)) {
             float rx = (pad.rx / 32767.0f) * (g_stick_invert_x.load() ? 1.0f : -1.0f);
@@ -371,7 +388,10 @@ void AfterCameraUpdate(uint8_t* base) {
     if (mode == kFirstPerson) {
         // The title's follow target trails Hector during a run. Anchor to his
         // live position and keep head clearance independent of look pitch.
-        math::FirstPersonPosition(player_position, yaw, g_first_person.load(), next_position);
+        float distance = math::kHeadClearance + g_first_person.load();
+        for (const auto& enemy : Enemies())
+            distance = math::EnemyEyeLimit(player_position, enemy.pos, yaw, distance);
+        math::FirstPersonEye(player_position, yaw, distance, next_position);
     } else {
         const bool aiming = g_aiming.load();
         float wanted = std::min(g_distance.load(), base_distance);

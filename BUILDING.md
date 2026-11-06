@@ -29,7 +29,7 @@ The root CMake default delegates to this Xbox build through the Python helper. I
 
 ## Native Linux and advanced graphics preview
 
-The preview uses the CastlevaniaCOD-PC 1.9.0 renderer and Linux SDK patch in a separate build directory. It uses Noble's product names and launcher artwork. The preview launcher uses the upstream layout. On Windows it also builds Noble's modern camera controls. Linux currently uses the upstream SDL input path.
+The preview uses the CastlevaniaCOD-PC 1.9.0 renderer and Linux SDK patch in a separate build directory. Windows uses Noble's launcher and modern camera controls. Use the in-game Graphics settings for the advanced renderer. The Linux preview uses the upstream launcher layout with Noble's artwork and SDL input.
 
 On Windows, build the preview with `Build Xbox D3D12.cmd --advanced`. On Linux, install Clang and LLD, CMake, Ninja, the SDL platform development dependencies, Vulkan development headers, vkd3d 2.1, and FFmpeg development libraries. Then build with your extracted USA Xbox copy:
 

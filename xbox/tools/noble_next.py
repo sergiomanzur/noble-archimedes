@@ -173,6 +173,9 @@ add_custom_command(TARGET NobleArchimedesLauncher POST_BUILD
     if os.name == 'nt':
         info = windows_controls(info)
     write('src/common/game_info.cpp', info)
+    cvtest = upstream('tools/cvtest/cvtest.py')
+    cvtest = re.sub(r'\bCastlevania(EU)?\b', r'NobleArchimedes\1', cvtest)
+    write('tools/cvtest/cvtest.py', cvtest)
     words = upstream('src/launcher/words.h')
     words = words.replace('Castlevania: Curse of Darkness - Launcher', 'Noble Archimedes - Launcher')
     write('src/launcher/words.h', words)

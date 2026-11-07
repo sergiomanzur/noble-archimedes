@@ -175,6 +175,7 @@ add_custom_command(TARGET NobleArchimedesLauncher POST_BUILD
     write('src/common/game_info.cpp', info)
     cvtest = upstream('tools/cvtest/cvtest.py')
     cvtest = re.sub(r'\bCastlevania(EU)?\b', r'NobleArchimedes\1', cvtest)
+    cvtest = replace(cvtest, 'kind in ("game", "NobleArchimedes")', 'kind in ("game", "Castlevania")')
     write('tools/cvtest/cvtest.py', cvtest)
     words = upstream('src/launcher/words.h')
     words = words.replace('Castlevania: Curse of Darkness - Launcher', 'Noble Archimedes - Launcher')

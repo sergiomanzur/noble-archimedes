@@ -7,8 +7,11 @@ donor snapshot in `xbox/third_party/castlevania-cod-pc` stays unchanged.
 
 ## Camera modes
 
-Open the in-game settings with **F10** and use the **Camera** tab, or press
-**F5** during play to cycle modes.
+Open Settings with **F10**. In the **v0.9.5b advanced Windows build**,
+camera settings are at the top of
+the **Controls** tab. Open the **Camera** dropdown and select a mode, then
+close Settings to see it during gameplay. **F5** also cycles the three modes.
+The older Windows builds put these settings in a separate **Camera** tab.
 
 | Mode | Behaviour |
 |---|---|

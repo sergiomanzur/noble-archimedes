@@ -23,6 +23,7 @@ REDIST_FILES = ('msvcp140.dll', 'vcruntime140.dll', 'vcruntime140_1.dll')
 BRANDING = ('launcher-background.png', 'launcher-theme.wav',
             'noble-archimedes.ico', 'noble-icon.png', 'PROVENANCE.md')
 ROOT_REQUIRED = ('LICENSE', 'THIRD_PARTY_NOTICES.md', 'docs/LICENSING.md',
+                 'CHANGELOG.md',
                  'licenses/GPL-2.0.txt', 'licenses/GPL-3.0.md',
                  'licenses/CC0-1.0.txt', 'licenses/XboxXBE-Recomp-MIT.txt',
                  'xbox/third_party/castlevania-cod-pc/LICENSE',
@@ -100,7 +101,7 @@ def validate_payload(payload):
             raise ValueError(f'compiler work forbidden: {name}')
 
 
-def package(root, build, sdk, redist):
+def package(root, build, sdk, redist, donor=None):
     root, build, sdk, redist = (Path(p).absolute() for p in (root, build, sdk, redist))
     payload = {}
     for name in ROOT_REQUIRED:
@@ -109,6 +110,8 @@ def package(root, build, sdk, redist):
             dest = 'branding/' + Path(name).name
         elif name.startswith('release/windows/'):
             dest = 'README.txt'
+        elif name == 'CHANGELOG.md':
+            dest = name
         else:
             dest = 'licenses/project/' + name
         payload[dest] = data
@@ -118,6 +121,12 @@ def package(root, build, sdk, redist):
         raise ValueError(f'build version must be {VERSION}')
     for name in SDK_REQUIRED:
         payload['licenses/sdk/' + name] = read_required(sdk / name)
+    donor_pin = DONOR_PIN
+    if donor:
+        donor_pin = subprocess.check_output(['git', '-C', str(donor), 'rev-parse', 'HEAD'], text=True).strip()
+        for name in ('LICENSE', 'README.md'):
+            payload['licenses/advanced-donor/' + name] = subprocess.check_output(
+                ['git', '-C', str(donor), 'show', f'HEAD:{name}'])
     for name in REDIST_FILES:
         data = read_required(redist / name)
         payload[name] = payload['compiler/' + name] = data
@@ -144,7 +153,7 @@ def package(root, build, sdk, redist):
     revision = subprocess.run(['git', '-C', str(root), 'rev-parse', 'HEAD'], capture_output=True, text=True)
     manifest = {'title': TITLE, 'version': VERSION, 'regions': regions,
                 'project_commit': revision.stdout.strip() if revision.returncode == 0 else None,
-                'eu_qualified': False, 'sdk_pin': SDK_PIN, 'donor_pin': DONOR_PIN,
+                'eu_qualified': False, 'sdk_pin': SDK_PIN, 'donor_pin': donor_pin,
                 'sha256': {name: hashlib.sha256(data).hexdigest() for name, data in sorted(payload.items())}}
     payload['manifest.json'] = (json.dumps(manifest, indent=2) + '\n').encode()
     # Exclusively create a new directory; preserve all previous artifacts even on failure.
@@ -176,12 +185,14 @@ def main():
     parser.add_argument('--root', type=Path, default=Path(__file__).resolve().parents[1])
     parser.add_argument('--build', type=Path)
     parser.add_argument('--sdk', type=Path)
+    parser.add_argument('--advanced', action='store_true')
     parser.add_argument('--redist', type=Path, help='VS x64 Microsoft.VC*.CRT directory')
     args = parser.parse_args()
     root = args.root.absolute()
-    build = args.build or root / 'output/jmafort-port/out/build/release'
-    sdk = args.sdk or root / 'output/jmafort-sdk'
-    print(package(root, build, sdk, find_redist(args.redist)))
+    advanced = root / 'output/noble-next'
+    build = args.build or (advanced / 'build-windows' if args.advanced else root / 'output/jmafort-port/out/build/release')
+    sdk = args.sdk or (advanced / 'sdk' if args.advanced else root / 'output/jmafort-sdk')
+    print(package(root, build, sdk, find_redist(args.redist), advanced / 'port' if args.advanced else None))
 
 
 if __name__ == '__main__':

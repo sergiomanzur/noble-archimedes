@@ -15,6 +15,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--commit', default='HEAD')
     parser.add_argument('--output', type=Path, required=True)
+    parser.add_argument('--advanced', action='store_true')
     args = parser.parse_args()
     commit = subprocess.check_output(['git', '-C', str(ROOT), 'rev-parse', args.commit], text=True).strip()
     source = subprocess.check_output(['git', '-C', str(ROOT), 'archive', '--format=tar', commit])
@@ -26,14 +27,26 @@ def main():
                 if '/generated/' in name or '/recomp/gen/' in name or Path(name).suffix.lower() in ('.xbe', '.iso', '.elf', '.dmp'):
                     raise RuntimeError(f'Private game input/output unexpectedly tracked: {name}')
                 payload['project/' + name] = archive.extractfile(member).read()
-    sdk = ROOT / 'output/jmafort-sdk'
+    advanced = ROOT / 'output/noble-next'
+    sdk = advanced / 'sdk' if args.advanced else ROOT / 'output/jmafort-sdk'
     sdk_files = subprocess.check_output(['git', '-C', str(sdk), 'ls-files', '-z']).decode().split('\0')
     for name in filter(None, sdk_files):
         path = sdk / name
         if path.is_file() and not path.is_symlink():
             payload['dependencies/xbox-xbe-recomp/' + name] = path.read_bytes()
-    dependencies = ROOT / 'output/jmafort-port/out/build/release/_deps'
+    dependencies = advanced / 'build-windows/_deps' if args.advanced else ROOT / 'output/jmafort-port/out/build/release/_deps'
     pins = {}
+    sdk_patch = 'project/xbox/third_party/castlevania-cod-pc/sdk-patches/xboxxbe-recomp.patch'
+    if args.advanced:
+        donor = advanced / 'port'
+        pins['castlevania-cod-pc'] = subprocess.check_output(
+            ['git', '-C', str(donor), 'rev-parse', 'HEAD'], text=True).strip()
+        donor_tar = subprocess.check_output(['git', '-C', str(donor), 'archive', '--format=tar', 'HEAD'])
+        with tarfile.open(fileobj=io.BytesIO(donor_tar)) as archive:
+            for member in archive:
+                if member.isfile():
+                    payload['dependencies/castlevania-cod-pc/' + member.name] = archive.extractfile(member).read()
+        sdk_patch = 'dependencies/castlevania-cod-pc/sdk-patches/xboxxbe-recomp.patch'
     for folder in sorted(dependencies.glob('*-src')):
         revision = subprocess.run(['git', '-C', str(folder), 'rev-parse', 'HEAD'], capture_output=True, text=True)
         pins[folder.name] = revision.stdout.strip() if revision.returncode == 0 else 'source snapshot'
@@ -46,8 +59,10 @@ def main():
             payload['dependencies/' + folder.name + '/' + relative.as_posix()] = path.read_bytes()
     version = payload['project/VERSION'].decode().strip()
     local_patches = sorted(name for name in payload if name.startswith('project/xbox/noble/sdk-patches/') and name.endswith('.patch'))
+    if args.advanced:
+        local_patches = ['project/xbox/tools/noble_next.py']
     manifest = {'project_commit': commit, 'sdk_commit': '91146ff6e2a218b19c1109dc665d06020472ab57',
-                'sdk_patch': 'project/xbox/third_party/castlevania-cod-pc/sdk-patches/xboxxbe-recomp.patch',
+                'sdk_patch': sdk_patch,
                 'sdk_patch_applied_to_snapshot': True,
                 'sdk_local_patches': local_patches, 'dependency_pins': pins,
                 'sha256': {name: hashlib.sha256(data).hexdigest() for name, data in sorted(payload.items())}}

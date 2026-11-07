@@ -46,6 +46,30 @@ def write(name, text):
     (PORT / name).write_text(text, encoding='utf-8', newline='\n')
 
 
+def dlss_supersampling_edits():
+    # The 4K/200% preset otherwise asks Streamline to run DLAA at 8K,
+    # exhausting VRAM as the first 3D scene creates its render targets.
+    return {
+        'app/app.h': [('float RenderScale(uint32_t guest_height);',
+                       'float RenderScale(uint32_t guest_height, bool dlss = false);')],
+        'app/settings.cpp': [(
+            'float RenderScale(uint32_t guest_height) {\n'
+            '    float h = CachedOutput().height * (Get().render_percent / 100.0f);',
+            'float RenderScale(uint32_t guest_height, bool dlss) {\n'
+            '    const uint32_t output_height = CachedOutput().height;\n'
+            '    float h = output_height * (Get().render_percent / 100.0f);\n'
+            '    if (dlss && h > std::max(output_height, 2160u)) {\n'
+            '        h = float(std::max(output_height, 2160u));\n'
+            '        LOG_FIRST(1, "render scale: limiting DLSS supersampling to %u lines", uint32_t(h));\n'
+            '    }')],
+        'gpu/d3d12.cpp': [
+            ('scale_ = app::RenderScale(guest_h_);',
+             'scale_ = app::RenderScale(guest_h_, aa_dlss_start_);'),
+            ('float want = app::RenderScale(guest_h_), aspect = TargetAspect();',
+             'float want = app::RenderScale(guest_h_, kind == framegen::kAaDlss), aspect = TargetAspect();')],
+    }
+
+
 def windows_controls(info):
     # Keep Noble's direct-look controls on Windows. Linux uses the SDL input
     # path until the mouse capture adapter supports relative mode there.
@@ -99,10 +123,28 @@ def prepare(assets, eu_assets):
     patch = PORT / 'sdk-patches/xboxxbe-recomp.patch'
     if patch.read_text(encoding='utf-8') != upstream('sdk-patches/xboxxbe-recomp.patch'):
         raise RuntimeError('The upstream SDK patch was modified')
-    if subprocess.run(['git', '-C', str(SDK), 'apply', '-R', '--check', str(patch)],
+    edits = dlss_supersampling_edits() if os.name == 'nt' else {}
+    # The donor patch overlaps these hunks. On a rebuild, recognize Noble's
+    # postimages and check the donor patch against the rest of the tree.
+    excludes = []
+    for name, replacements in edits.items():
+        source = (SDK / 'runtime' / name).read_text(encoding='utf-8')
+        if all(new in source for _, new in replacements):
+            excludes.append(f'--exclude=runtime/{name}')
+    if subprocess.run(['git', '-C', str(SDK), 'apply', '-R', '--check', *excludes, str(patch)],
                       capture_output=True).returncode:
         run('git', '-C', SDK, 'apply', '--check', patch)
         run('git', '-C', SDK, 'apply', '--whitespace=nowarn', patch)
+
+    for name, replacements in edits.items():
+        path = SDK / 'runtime' / name
+        source = path.read_text(encoding='utf-8')
+        updated = source
+        for old, new in replacements:
+            if new not in updated:
+                updated = replace(updated, old, new)
+        if updated != source:
+            path.write_text(updated, encoding='utf-8', newline='\n')
 
     for name in ('config/game.toml', 'config/game_eu.toml'):
         (PORT / name).write_bytes(branded_source(name, upstream(name).encode()))

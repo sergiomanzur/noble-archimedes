@@ -1,6 +1,6 @@
 # Noble Archimedes
 
-**Latest beta: [v0.9.4b](https://github.com/sergiomanzur/noble-archimedes/releases/tag/v0.9.4b).** First person now follows Hector’s live position while running. The game hides the arrow inside its window and shows a centered dot while mouse look is captured. Right-stick inversion is available in the Camera tab. See [modern PC controls](docs/MODERN_PC_CONTROLS.md) and the [changelog](CHANGELOG.md). The Windows download uses the USA Xbox release and compiles the game locally on first run. The release includes a companion source archive and SHA-256 checksums.
+**Latest beta: [v0.9.5b](https://github.com/sergiomanzur/noble-archimedes/releases/tag/v0.9.5b).** This beta adds advanced graphics, improves first-person movement and Classic camera controls, and fixes a black screen when loading a save with DLSS at 4K and 200% render scale. The Windows download uses your USA Xbox copy and compiles the game locally on first run. See the [changelog](CHANGELOG.md) and [modern PC controls](docs/MODERN_PC_CONTROLS.md).
 
 <img src="assets/noble/noble-icon.png" width="112" alt="Original Noble Archimedes astrolabe emblem">
 
@@ -19,7 +19,7 @@ Target: Windows x64 and a Direct3D 12 capable GPU. Building requires Python 3, G
 
 The build helper verifies the upstream snapshot, prepares an isolated working copy and fetches the pinned open-source SDK. Game code is generated locally from your XBE. The launcher and game are written to `output/jmafort-port/out/build/release/` as `NobleArchimedesLauncher.exe` and `NobleArchimedes.exe`. Primary CMake targets and generated game-DLL names use `NobleArchimedes*`; some internal window classes, logs and settings retain upstream compatibility names. See [BUILDING.md](BUILDING.md) for input validation, EU preparation, alternate asset paths and the experimental PS2 workflow.
 
-The development branch also has an opt-in advanced renderer and native Linux preview, with a Steam Deck packaging workflow. See the [preview build instructions](BUILDING.md#native-linux-and-advanced-graphics-preview).
+The Windows beta uses the advanced renderer. Native Linux and Steam Deck are available through the [preview build instructions](BUILDING.md#native-linux-and-advanced-graphics-preview).
 
 ## Xbox features and validation
 

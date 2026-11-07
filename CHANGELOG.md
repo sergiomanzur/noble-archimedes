@@ -1,11 +1,12 @@
 # Changelog
 
-## Unreleased
+## v0.9.5b — Advanced graphics and camera fixes
 
-- Restore the original Noble launcher in the Windows advanced preview.
+- Fix a black screen after Continue on a 4K display at 200% render scale with DLSS. The renderer now limits DLSS supersampling to 4K or the output height, whichever is greater.
+- Keep the original Noble Archimedes Windows launcher, with its artwork, fonts, colors and music.
 - Give first-person view more clearance near enemies. Route Classic mouse motion through the original orbit camera and fix right-stick inversion at full deflection.
-
-- Add an opt-in preview build for the upstream advanced renderer and native Linux, with a portable Linux packaging path for Steam Deck.
+- Ship the advanced Windows renderer with HDR, ambient occlusion, temporal anti-aliasing, texture material maps and DXR options. Optional NVIDIA features require a compatible GPU and vendor runtime.
+- Include native Linux preview build instructions and a Steam Deck packaging path in the source release.
 - Make first-person movement follow the mouse view immediately, including after a quick turn in the opposite direction.
 - Show a region picker next to Play when both the USA and European game copies and their matching executables are available.
 

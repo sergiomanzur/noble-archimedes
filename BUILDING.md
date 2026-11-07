@@ -29,9 +29,11 @@ The root CMake default delegates to this Xbox build through the Python helper. I
 
 ## Native Linux and advanced graphics preview
 
-The preview uses the CastlevaniaCOD-PC 1.9.0 renderer and Linux SDK patch in a separate build directory. Windows uses Noble's launcher and modern camera controls. Use the in-game Graphics settings for the advanced renderer. The Linux preview uses the upstream launcher layout with Noble's artwork and SDL input.
+The Windows release and native Linux preview use the CastlevaniaCOD-PC 1.9.0 renderer and SDK patch in a separate build directory. Windows uses Noble's launcher and modern camera controls. Use the in-game Graphics settings for the advanced renderer. The Linux preview uses the upstream launcher layout with Noble's artwork and SDL input.
 
-On Windows, build the preview with `Build Xbox D3D12.cmd --advanced`. On Linux, install Clang and LLD, CMake, Ninja, the SDL platform development dependencies, Vulkan development headers, vkd3d 2.1, and FFmpeg development libraries. Then build with your extracted USA Xbox copy:
+On Windows, build with `Build Xbox D3D12.cmd --advanced --full-game`. The output is `output/noble-next/build-windows/`. For the Windows release ZIP, run `python tools/release_noble.py --advanced` and use `python tools/source_release_noble.py --advanced --output PATH` for the corresponding source archive.
+
+On Linux, install Clang and LLD, CMake, Ninja, the SDL platform development dependencies, Vulkan development headers, vkd3d 2.1, and FFmpeg development libraries. Then build with your extracted USA Xbox copy:
 
 ```bash
 python3 xbox/tools/noble_next.py --assets /path/to/extracted-usa --build \
@@ -48,7 +50,7 @@ python3 xbox/tools/noble_next.py --assets /path/to/extracted-usa \
 
 The archive is written under `output/noble-next-linux/port/out/release/`. On Steam Deck, extract it to a writable location in Desktop Mode, put your Xbox disc image in its `assets/` folder, and add `NobleArchimedesLauncher` as a non-Steam game with the extracted folder as its working directory. The launcher is a native Linux executable. Use the Deck's 1280×800 resolution for 16:10.
 
-The upstream renderer supplies material maps, HDR, ambient occlusion, temporal anti-aliasing and optional vendor upscaling. Vulkan FSR needs the upstream FidelityFX build passed via `XBE_FSR_VK_DIR`. DLSS needs supported NVIDIA hardware and its vendor runtime. Frame generation and DXR ray tracing are Windows features. Test the preview on your hardware before relying on these options. See the [upstream platform notes](https://github.com/jmafort/CastlevaniaCOD-PC/tree/e3d9d83b104f641c5064794156024421da5adcce#linux).
+The upstream renderer supplies material maps, HDR, ambient occlusion, temporal anti-aliasing and optional vendor upscaling. Vulkan FSR needs the upstream FidelityFX build passed via `XBE_FSR_VK_DIR`. DLSS needs supported NVIDIA hardware and its vendor runtime. On Windows, install the matching NVIDIA libraries in `streamline/` beside the game executable. Frame generation and DXR ray tracing are Windows features. See the [upstream platform notes](https://github.com/jmafort/CastlevaniaCOD-PC/tree/e3d9d83b104f641c5064794156024421da5adcce#linux).
 
 For HD movie replacements, put a compatible pack's `movies.toml`, signatures and video files in `movies/` beside the game executable. On Windows the decoder uses Media Foundation. The game's disc still supplies the timing and audio. Use **HD movies** and **Movie framing** in the launcher or in-game settings. See the [upstream pack format](https://github.com/jmafort/CastlevaniaCOD-PC#hd-movies).
 

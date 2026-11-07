@@ -27,11 +27,13 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('archive', type=Path)
     parser.add_argument('--game', type=Path, default=ROOT / 'extracted')
+    parser.add_argument('--advanced', action='store_true')
     args = parser.parse_args()
+    work = ROOT / 'output/noble-next/port' if args.advanced else WORK
     import sys
-    sys.path.insert(0, str(WORK / 'tools/cvtest'))
+    sys.path.insert(0, str(work / 'tools/cvtest'))
     import cvtest
-    install = load('noble_install', WORK / 'tools/cvtest/install.py')
+    install = load('noble_install', work / 'tools/cvtest/install.py')
     package = load('noble_package', ROOT / 'tools/release_noble.py')
     folder = Path(tempfile.gettempdir()).resolve() / ('NobleArchimedes-release-test-' + time.strftime('%Y%m%d-%H%M%S'))
     for parent in folder.parents:
@@ -62,7 +64,7 @@ def main():
     env['PATH'] = ';'.join(map(str, [install.SYSTEM32, windows, install.SYSTEM32 / 'Wbem']))
     checks = [{'step': 'package', 'label': 'runtime ZIP dependencies and no prebuilt game DLL',
                'ok': True, 'errors': [], 'warnings': []}]
-    passed = cvtest.run(str(WORK / 'tools/cvtest/scenarios/newgame.json'), None, False,
+    passed = cvtest.run(str(work / 'tools/cvtest/scenarios/newgame.json'), None, False,
                        install=folder, env=env, checks=checks)
     print(f'Test settings and saves retained at {folder}', flush=True)
     return 0 if passed else 1

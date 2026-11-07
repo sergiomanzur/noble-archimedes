@@ -90,6 +90,21 @@ def windows_controls(info):
     write('src/game/warp.cpp', replace(warp, '    CV_ORIGINAL(CV_CAMERA_UPDATE)(ctx, base);',
                                       '    CV_ORIGINAL(CV_CAMERA_UPDATE)(ctx, base);\n    modern::AfterCameraUpdate(base);'))
     menu = '#include "common/modern_controls.h"\n' + upstream('src/common/menu.cpp')
+    menu = replace(menu, 'bool g_scaled = false;',
+                   'bool g_scaled = false;\nfloat g_font_scale = 1.0f;\nfloat g_ui_scale = 1.0f;')
+    menu = replace(menu, '    Style(scale);\n    g_scaled = true;',
+                   '    Style(scale);\n    g_font_scale = g_ui_scale = scale;\n    g_scaled = true;')
+    menu = replace(menu, '    PollKeys();\n    ImGuiIO& io = ImGui::GetIO();',
+                   '''    PollKeys();
+    ImGuiIO& io = ImGui::GetIO();
+    // A window on a high-resolution monitor can be much smaller than the desktop.
+    // Keep its settings tabs and dropdowns within the actual client area.
+    const float ui_scale = std::clamp(io.DisplaySize.y / 1080.0f, 0.75f, g_font_scale);
+    if (std::fabs(ui_scale - g_ui_scale) > 0.001f) {
+        Style(ui_scale);
+        io.FontGlobalScale = ui_scale / g_font_scale;
+        g_ui_scale = ui_scale;
+    }''')
     menu = replace(menu, '    io.MouseDrawCursor = false;', '''    modern::SetMenuOpen(g_open);
     io.ConfigFlags |= ImGuiConfigFlags_NoMouseCursorChange;
     io.MouseDrawCursor = false;

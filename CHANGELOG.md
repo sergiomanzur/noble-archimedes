@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Scale the advanced Windows Settings menu to the game window when it is smaller than a high-resolution desktop, keeping camera controls and other settings within the panel.
+
 ## v0.9.5b — Advanced graphics and camera fixes
 
 - Fix a black screen after Continue on a 4K display at 200% render scale with DLSS. The renderer now limits DLSS supersampling to 4K or the output height, whichever is greater.

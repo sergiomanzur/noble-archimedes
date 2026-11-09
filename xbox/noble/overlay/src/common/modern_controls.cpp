@@ -487,12 +487,12 @@ void SetMouseCapture(bool value) { g_capture = value; }
 bool DrawSettings() {
     bool changed = false;
     int move_deadzone = g_move_deadzone.load();
-    if (ImGui::SliderInt("Movement stick dead zone", &move_deadzone, 0, 50, "%d%%", ImGuiSliderFlags_AlwaysClamp)) {
+    if (ImGui::SliderInt("Move dead zone", &move_deadzone, 0, 50, "%d%%", ImGuiSliderFlags_AlwaysClamp)) {
         g_move_deadzone = move_deadzone;
         changed = true;
     }
     int camera_deadzone = g_camera_deadzone.load();
-    if (ImGui::SliderInt("Camera stick dead zone", &camera_deadzone, 0, 50, "%d%%", ImGuiSliderFlags_AlwaysClamp)) {
+    if (ImGui::SliderInt("Camera dead zone", &camera_deadzone, 0, 50, "%d%%", ImGuiSliderFlags_AlwaysClamp)) {
         g_camera_deadzone = camera_deadzone;
         changed = true;
     }

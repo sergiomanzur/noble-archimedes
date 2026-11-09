@@ -33,6 +33,8 @@ bool MouseCaptured();
 // Adds the modern mouse buttons and aim behaviour to the pad the game is
 // about to read. Call after the keyboard mapping; scripted runs skip it.
 void ApplyPad(input::Pad& pad);
+// Filter controller input before adding keyboard, mouse or scripted input.
+void ApplyStickDeadzones(input::Pad& pad);
 
 // Applies the selected camera to the guest camera view after the original
 // title camera update has run. Safe to call for every camera update; it does

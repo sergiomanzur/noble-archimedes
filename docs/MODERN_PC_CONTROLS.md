@@ -7,7 +7,7 @@ donor snapshot in `xbox/third_party/castlevania-cod-pc` stays unchanged.
 
 ## Camera modes
 
-Open Settings with **F10**. In the **v0.9.5b advanced Windows build**,
+Open Settings with **F10**. In **v0.9.5b and later advanced Windows builds**,
 camera settings are at the top of
 the **Controls** tab. Open the **Camera** dropdown and select a mode, then
 close Settings to see it during gameplay. **F5** also cycles the three modes.
@@ -74,7 +74,7 @@ camera's heading.
 
 ## Settings
 
-The Camera tab writes the following keys to `castlevania.toml` beside the
+The camera settings write the following keys to `castlevania.toml` beside the
 executable. The launcher preserves unknown keys, so the settings survive a
 launcher save.
 
@@ -86,6 +86,8 @@ launcher save.
 | `modern_invert_y` | `false` | Flip vertical mouse look |
 | `modern_invert_stick_x` | `true` | Correct the title's inverted controller camera X |
 | `modern_invert_stick_y` | `true` | Correct the title's inverted controller camera Y |
+| `move_stick_deadzone` | `10` | Movement stick dead zone as a percentage, 0–50 |
+| `camera_stick_deadzone` | `10` | Camera stick dead zone as a percentage, 0–50 |
 | `modern_shoulder_offset` | `120` | Guest units to the right of the safe camera line |
 | `modern_camera_distance` | `620` | Guest units from Hector in over-the-shoulder mode |
 | `modern_first_person_offset` | `0` | Extra forward distance beyond the default head clearance |

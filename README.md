@@ -1,6 +1,6 @@
 # Noble Archimedes
 
-**Latest beta: [v0.9.5b](https://github.com/sergiomanzur/noble-archimedes/releases/tag/v0.9.5b).** This beta adds advanced graphics, improves first-person movement and Classic camera controls, and fixes a black screen when loading a save with DLSS at 4K and 200% render scale. The Windows download uses your USA Xbox copy and compiles the game locally on first run. See the [changelog](CHANGELOG.md) and [modern PC controls](docs/MODERN_PC_CONTROLS.md).
+**Latest beta: [v0.9.6b](https://github.com/sergiomanzur/noble-archimedes/releases/tag/v0.9.6b).** Adjust movement and camera stick dead zones independently and use Settings in smaller windows. The Windows download includes the tested USA host and a PAL host for compatibility testing. The game compiles locally on first run from your own Xbox files. See the [changelog](CHANGELOG.md) and [modern PC controls](docs/MODERN_PC_CONTROLS.md).
 
 <img src="assets/noble/noble-icon.png" width="112" alt="Original Noble Archimedes astrolabe emblem">
 

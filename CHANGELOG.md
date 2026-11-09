@@ -1,6 +1,9 @@
 # Changelog
 
-## Unreleased
+## v0.9.6b — Controller dead zones and PAL build
+
+- Add independent movement and camera stick dead zones to the Windows Controls menu. Both default to 10% and can be adjusted from 0% to 50%. Input ramps smoothly past the dead zone and retains full stick travel. (#4)
+- Include the PAL Windows host for the supported European Xbox executable. The PAL host builds successfully. Gameplay and Brazilian Portuguese translation compatibility still need testing with complete PAL game data. (#1)
 
 - Scale the advanced Windows Settings menu to the game window when it is smaller than a high-resolution desktop, keeping camera controls and other settings within the panel.
 

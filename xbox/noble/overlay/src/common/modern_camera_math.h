@@ -79,6 +79,21 @@ inline void FirstPersonPosition(const float player[3], float yaw, float forward_
     FirstPersonEye(player, yaw, kHeadClearance + forward_offset, out);
 }
 
+inline void ApplyStickDeadzone(int16_t& x, int16_t& y, int percent) {
+    constexpr float full = 32767.0f;
+    const float deadzone = full * (std::clamp(percent, 0, 50) / 100.0f);
+    if (deadzone == 0.0f) return;
+    const float magnitude = std::hypot(float(x), float(y));
+    if (magnitude <= deadzone) {
+        x = y = 0;
+    } else if (magnitude < full) {
+        // Ramp the remaining travel from zero without changing direction.
+        const float gain = (1.0f - deadzone / magnitude) / (1.0f - deadzone / full);
+        x = static_cast<int16_t>(std::lround(x * gain));
+        y = static_cast<int16_t>(std::lround(y * gain));
+    }
+}
+
 inline int16_t InvertStick(int16_t value) {
     return static_cast<int16_t>(-std::max<int>(value, -32767));
 }

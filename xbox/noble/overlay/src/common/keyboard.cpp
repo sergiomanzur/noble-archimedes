@@ -498,6 +498,7 @@ void KeyboardPad(int port, input::Pad& p) {
         std::swap(p.analog[kWhite], p.analog[kLT]);
         std::swap(p.analog[kBlack], p.analog[kRT]);
     }
+    if (!scripted) modern::ApplyStickDeadzones(p);
     Keyboard(p);
     Scripted(p);
     if (LiveOn()) {

@@ -74,6 +74,9 @@ std::atomic<bool> g_invert_x{false};      // mouse only
 std::atomic<bool> g_invert_y{false};      // mouse only
 std::atomic<bool> g_stick_invert_x{true}; // correct the title's inverted camera stick
 std::atomic<bool> g_stick_invert_y{true};
+constexpr int kDefaultStickDeadzone = 10;
+std::atomic<int> g_move_deadzone{kDefaultStickDeadzone};
+std::atomic<int> g_camera_deadzone{kDefaultStickDeadzone};
 std::atomic<float> g_shoulder{120.0f};    // guest units to the right
 std::atomic<float> g_distance{620.0f};    // camera distance from Hector in OTS mode
 std::atomic<float> g_first_person{0.0f};  // optional forward offset in FPS mode
@@ -193,6 +196,8 @@ void LoadSettings(const void* table) {
     g_invert_y = t["modern_invert_y"].value_or(g_invert_y.load());
     g_stick_invert_x = t["modern_invert_stick_x"].value_or(g_stick_invert_x.load());
     g_stick_invert_y = t["modern_invert_stick_y"].value_or(g_stick_invert_y.load());
+    g_move_deadzone = std::clamp(t["move_stick_deadzone"].value_or(kDefaultStickDeadzone), 0, 50);
+    g_camera_deadzone = std::clamp(t["camera_stick_deadzone"].value_or(kDefaultStickDeadzone), 0, 50);
     g_shoulder = Clamp(t["modern_shoulder_offset"].value_or(g_shoulder.load()), 0.0f, 350.0f);
     g_distance = Clamp(t["modern_camera_distance"].value_or(g_distance.load()), kMinDistance, 1600.0f);
     g_first_person = Clamp(t["modern_first_person_offset"].value_or(g_first_person.load()), 0.0f, 400.0f);
@@ -208,6 +213,8 @@ void SaveSettings(void* table) {
     t.insert_or_assign("modern_invert_y", g_invert_y.load());
     t.insert_or_assign("modern_invert_stick_x", g_stick_invert_x.load());
     t.insert_or_assign("modern_invert_stick_y", g_stick_invert_y.load());
+    t.insert_or_assign("move_stick_deadzone", int64_t(g_move_deadzone.load()));
+    t.insert_or_assign("camera_stick_deadzone", int64_t(g_camera_deadzone.load()));
     t.insert_or_assign("modern_shoulder_offset", double(g_shoulder.load()));
     t.insert_or_assign("modern_camera_distance", double(g_distance.load()));
     t.insert_or_assign("modern_first_person_offset", double(g_first_person.load()));
@@ -435,6 +442,11 @@ void Shutdown() {
     ReleaseCapture();
 }
 
+void ApplyStickDeadzones(input::Pad& pad) {
+    math::ApplyStickDeadzone(pad.lx, pad.ly, g_move_deadzone.load());
+    math::ApplyStickDeadzone(pad.rx, pad.ry, g_camera_deadzone.load());
+}
+
 void ResetDefaults() {
     g_mode = kOverShoulder;
     g_sensitivity = 0.15f;
@@ -442,6 +454,8 @@ void ResetDefaults() {
     g_invert_y = false;
     g_stick_invert_x = true;
     g_stick_invert_y = true;
+    g_move_deadzone = kDefaultStickDeadzone;
+    g_camera_deadzone = kDefaultStickDeadzone;
     g_shoulder = 120.0f;
     g_distance = 620.0f;
     g_first_person = 0.0f;
@@ -472,6 +486,16 @@ void SetMouseCapture(bool value) { g_capture = value; }
 
 bool DrawSettings() {
     bool changed = false;
+    int move_deadzone = g_move_deadzone.load();
+    if (ImGui::SliderInt("Movement stick dead zone", &move_deadzone, 0, 50, "%d%%", ImGuiSliderFlags_AlwaysClamp)) {
+        g_move_deadzone = move_deadzone;
+        changed = true;
+    }
+    int camera_deadzone = g_camera_deadzone.load();
+    if (ImGui::SliderInt("Camera stick dead zone", &camera_deadzone, 0, 50, "%d%%", ImGuiSliderFlags_AlwaysClamp)) {
+        g_camera_deadzone = camera_deadzone;
+        changed = true;
+    }
     int mode = g_mode.load();
     static const char* kModes[] = {"Classic (original camera)", "Over-the-shoulder (RE2 Remake)",
                                    "First person"};

@@ -136,6 +136,25 @@ void TestEnemyClearanceAndStickLimits() {
           "mouse inversion does not change full-stick input");
 }
 
+void TestStickDeadzone() {
+    using modern::math::ApplyStickDeadzone;
+    int16_t x = 2000, y = -2000;
+    ApplyStickDeadzone(x, y, 10);
+    Check(x == 0 && y == 0, "small diagonal drift is centered");
+    x = 3000; y = 3000;
+    ApplyStickDeadzone(x, y, 10);
+    Check(x > 0 && x == y && x < 3000, "diagonal input keeps its direction and ramps from zero");
+    x = 32767; y = 0;
+    ApplyStickDeadzone(x, y, 50);
+    Check(x == 32767 && y == 0, "full cardinal input still reaches full speed");
+    x = -32768; y = 32767;
+    ApplyStickDeadzone(x, y, 50);
+    Check(x == -32768 && y == 32767, "full diagonal input keeps the native endpoints");
+    x = -20; y = 100;
+    ApplyStickDeadzone(x, y, 0);
+    Check(x == -20 && y == 100, "zero dead zone preserves the original input");
+}
+
 }  // namespace
 
 int main() {
@@ -145,6 +164,7 @@ int main() {
     TestFirstPerson();
     TestFirstPersonMovement();
     TestEnemyClearanceAndStickLimits();
+    TestStickDeadzone();
     if (failures) {
         std::fprintf(stderr, "modern camera math: %d failure(s)\n", failures);
         return 1;

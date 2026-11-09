@@ -85,6 +85,19 @@ def windows_controls(info):
     keyboard = replace(keyboard, '    if (g_invert_camera_x) p.rx = Flip(p.rx);\n'
                        '    if (g_invert_camera_y) p.ry = Flip(p.ry);',
                        '    if (!noble_scripted) modern::ApplyPad(p);')
+    keyboard = replace(keyboard, '''// a stick under 1/32 of its throw from centre is at rest: 4 of the PS2's 128, a quarter of the game's own dead zone
+void Rest(int16_t& x, int16_t& y) {
+    constexpr float kRest = 1024;
+    if (float(x) * float(x) + float(y) * float(y) < kRest * kRest) x = y = 0;
+}
+
+''', '')
+    keyboard = replace(keyboard, '''    // the PS2's sticks (hooks.cpp) reach the game as they are: a stick at rest, a few hundred off centre, is centred
+    if (g_ps2_stick) {
+        Rest(p.lx, p.ly);
+        Rest(p.rx, p.ry);
+    }''',
+                       '    if (!noble_scripted) modern::ApplyStickDeadzones(p);')
     write('src/common/keyboard.cpp', keyboard)
     warp = '#include "common/modern_controls.h"\n' + upstream('src/game/warp.cpp')
     write('src/game/warp.cpp', replace(warp, '    CV_ORIGINAL(CV_CAMERA_UPDATE)(ctx, base);',
@@ -124,6 +137,7 @@ def windows_controls(info):
     if (msg == WM_ACTIVATE && LOWORD(wp) == WA_INACTIVE) modern::SetMenuOpen(true);''')
     # Use the donor's Controls page and append Noble's camera options.
     menu = replace(menu, 'void ControlsTab(bool& save) {', 'void ControlsTab(bool& save) {\n    save |= modern::DrawSettings();')
+    menu = replace(menu, 'void Defaults() {', 'void Defaults() {\n    modern::ResetDefaults();')
     write('src/common/menu.cpp', menu)
     return info
 

@@ -1,5 +1,19 @@
 # Changelog
 
+## v0.9.7b — Native Android, Linux and Windows release
+
+- Add a native arm64 Android host built from the same recompiled Xbox game and advanced renderer. Direct3D 12 runs on Vulkan through a patched vkd3d with mobile descriptor heaps.
+- Add a branded Android splash and the Noble Archimedes astrolabe as the APK launcher icon, adaptive icon and round icon.
+- Add a complete touch pad: two sticks, d-pad, A/B/X/Y, LB/RB, LT/RT, Back, Start, L3/R3 and a MENU button, with a floating TOUCH/HIDE bubble that remembers its state. A physical gamepad hides the touch pad and the bubble automatically; L3 + R3 shows or hides the pad, and disconnecting the pad restores the touch controls.
+- Add SDL3 controller support for built-in handheld pads, USB and Bluetooth controllers. Start+Back and the touch MENU button open the in-game settings menu, and L3 + R3 shows or hides the touch pad.
+- Make the Vulkan surface and swap chain again when Android destroys and restores the native window, and reset queued menu input, so the picture returns after switching apps instead of staying black or aborting.
+- Keep the game on one guest back-buffer address on Android. Alternating the Xbox's two buffers made every other presented frame black on the mobile Vulkan path, which looked like constant flicker in the title menu, cinematics and gameplay.
+- Handle Android's portrait-panel/landscape-window rotation before presentation, keeping the game upright. Keep the game's own XMV movies, saves, sound and HD texture packs. HD movie packs and the Windows mouse camera are not available yet.
+- Tested on a Retroid Pocket 6 (Snapdragon 8 Gen 2 / Adreno 740, Android 13): splash, title, intro movies, name entry, save creation, courtyard gameplay, touch controls and the in-game menu.
+- Add a portable Linux x86_64 AppImage built from the same recompiled Xbox game and advanced renderer, with vkd3d, FFmpeg and the first-run compiler included. The tested Linux configuration is the USA release; ray tracing, DLSS, frame generation and AMD FSR are not included in this Linux build.
+- Rebuild and publish the Windows x64 package at 0.9.7b with the current launcher and controller dead-zone controls.
+- v0.9.7b ships native Windows x64, Linux x86_64 and Android arm64 builds, all bring-your-own-game. See the release downloads and [android/README.md](android/README.md).
+
 ## v0.9.6b — Controller dead zones and PAL build
 
 - Add independent movement and camera stick dead zones to the Windows Controls menu. Both default to 10% and can be adjusted from 0% to 50%. Input ramps smoothly past the dead zone and retains full stick travel. (#4)

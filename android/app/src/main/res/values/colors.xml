@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="noble_background">#061114</color>
+    <color name="noble_background_deep">#03090B</color>
+    <color name="noble_gold">#D8A84E</color>
+    <color name="noble_gold_dim">#8F6B2F</color>
+    <color name="noble_teal">#0E4A52</color>
+</resources>

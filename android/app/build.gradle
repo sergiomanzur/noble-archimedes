@@ -1,0 +1,86 @@
+plugins {
+    id 'com.android.application'
+}
+
+// Paths to the prepared Noble Archimedes sources. The build helper
+// (tools/build_android.py) passes all of these; a plain Gradle build can
+// also point at them with -PnobleSdk=... etc.
+def nobleSdk = project.findProperty('nobleSdk') ?: System.getenv('NOBLE_SDK')
+def noblePort = project.findProperty('noblePort') ?: System.getenv('NOBLE_PORT')
+def nobleVkd3d = project.findProperty('nobleVkd3d') ?: System.getenv('NOBLE_VKD3D')
+def nobleGenerated = project.findProperty('nobleGenerated') ?: System.getenv('NOBLE_GENERATED')
+def nobleImgui = project.findProperty('nobleImgui') ?: System.getenv('NOBLE_IMGUI')
+def nobleToml = project.findProperty('nobleToml') ?: System.getenv('NOBLE_TOML')
+def nobleXxhash = project.findProperty('nobleXxhash') ?: System.getenv('NOBLE_XXHASH')
+def nobleSdl = project.findProperty('nobleSdl') ?: System.getenv('NOBLE_SDL')
+def nobleStb = project.findProperty('nobleStb') ?: System.getenv('NOBLE_STB')
+
+android {
+    namespace 'com.noblearchimedes'
+    compileSdk 34
+    ndkVersion '26.2.11394342'
+
+    defaultConfig {
+        applicationId 'com.noblearchimedes.game'
+        minSdk 26
+        targetSdk 34
+        versionCode 907
+        versionName '0.9.7b'
+
+        ndk {
+            abiFilters 'arm64-v8a'
+        }
+
+        externalNativeBuild {
+            cmake {
+                arguments '-DANDROID_STL=c++_static',
+                          '-DANDROID_PLATFORM=android-26',
+                          "-DNOBLE_SDK=${nobleSdk}",
+                          "-DNOBLE_PORT=${noblePort}",
+                          "-DNOBLE_VKD3D=${nobleVkd3d}",
+                          "-DNOBLE_GENERATED=${nobleGenerated}",
+                          "-DNOBLE_IMGUI=${nobleImgui}",
+                          "-DNOBLE_TOML=${nobleToml}",
+                          "-DNOBLE_XXHASH=${nobleXxhash}",
+                          "-DNOBLE_SDL=${nobleSdl}",
+                          "-DNOBLE_STB=${nobleStb}"
+                cppFlags '-std=gnu++20', '-fno-strict-aliasing'
+            }
+        }
+    }
+
+    externalNativeBuild {
+        cmake {
+            path 'src/main/cpp/CMakeLists.txt'
+            version '3.22.1'
+        }
+    }
+
+    buildTypes {
+        debug {
+            debuggable true
+            jniDebuggable true
+        }
+        release {
+            minifyEnabled false
+            // Local builds are signed with the debug key so they install on a device.
+            // Replace with a private keystore for a public release.
+            signingConfig signingConfigs.debug
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    lint {
+        abortOnError false
+    }
+
+    packaging {
+        jniLibs {
+            useLegacyPackaging false
+        }
+    }
+}

@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Android 12+ shows this branded launch splash before the SDL window exists.
+         The in-app SplashView then carries the same emblem until the game renders. -->
+    <style name="NobleTheme" parent="android:Theme.Material.NoActionBar.Fullscreen">
+        <item name="android:windowBackground">@color/noble_background</item>
+        <item name="android:windowNoTitle">true</item>
+        <item name="android:windowFullscreen">true</item>
+        <item name="android:windowActionModeOverlay">true</item>
+        <item name="android:windowLayoutInDisplayCutoutMode">shortEdges</item>
+        <item name="android:colorAccent">@color/noble_gold</item>
+        <item name="android:navigationBarColor">@color/noble_background_deep</item>
+        <item name="android:statusBarColor">@color/noble_background_deep</item>
+        <item name="android:windowSplashScreenBackground">@color/noble_background</item>
+        <item name="android:windowSplashScreenAnimatedIcon">@drawable/ic_launcher_foreground</item>
+        <item name="android:windowSplashScreenIconBackgroundColor">@color/noble_background</item>
+        <item name="android:windowSplashScreenAnimationDuration">350</item>
+    </style>
+</resources>

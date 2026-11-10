@@ -34,6 +34,9 @@ src/recomp/chunks/
 src/recomp/guest_entry_compat.hpp
 # Captured game output (screenshots, frame dumps, VRAM/RAM dumps)
 *.png
+# Android launcher/splash artwork is project branding, not game output
+!android/app/src/main/res/**/*.png
+!assets/noble/*.png
 *.ppm
 *.dmp
 *.raw
@@ -51,6 +54,16 @@ output/*
 !output/HANDOFF.md
 !output/render-fix-notes.md
 !output/perf-notes.md
+# Android local build state
+android/.gradle/
+android/app/.cxx/
+android/local.properties
+android/app/build/
+*.apk
+*.aab
+*.keystore
+*.jks
+
 # Local runtime state
 mc0/
 mc1/

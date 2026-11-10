@@ -118,8 +118,18 @@ disconnecting it brings the touch pad back.
   connected. With a pad, the touch controls and the bubble stay hidden; press
   **L3 + R3** to bring the pad back or put it away again.
 - **MENU** opens the game's ImGui settings menu and hides the pad so the menu
-  is fully usable by touch. Closing the menu (Back, or its close button)
-  restores the pad.
+  is fully usable by touch. The same happens when a controller opens the menu
+  with **Start + Back**, or when the system **Back** button is used. Closing the
+  menu restores the pad.
+- The menu uses large text and controls sized for a phone screen. Its pages
+  always show a wide scrollbar and scroll by touch drag, mouse wheel or the
+  controller's D-pad/stick. Tapping a setting still works normally; dragging
+  the page scrolls it.
+- The **Controls** tab has the three camera systems: **Classic** (the original
+  follow camera), **Over-the-shoulder** (RE2 Remake style) and **First person**.
+  The right stick turns the selected camera; the **Camera** section's
+  **Invert camera left / right** and **Invert camera up / down** flip its axes
+  immediately. Unchecked is the standard direction.
 - A touch in the menu needs a normal, brief press; a very quick tap may be
   treated as a hover by SDL's touch-to-mouse bridge.
 - The Android **Back** button toggles the settings menu instead of leaving the
@@ -146,9 +156,11 @@ Known differences from the Windows build:
   them presented every other frame black on the mobile Vulkan path, which
   looked like constant flicker in the title menu, cinematics and gameplay.
   The PC host keeps the original rotation.
-- **Modern mouse camera**: the imported PC mouse capture/over-the-shoulder
-  camera is Windows-only. Android uses the game's original camera with the
-  right stick. Mouse and relative-look controls are not available.
+- **Mouse look**: the imported PC mouse capture is Windows-only. Android gets
+  the same Classic, over-the-shoulder (RE2 Remake) and first-person cameras,
+  driven by the right stick from a controller or the touch pad, with the same
+  dead zones, shoulder/distance offsets and camera inversion. Mouse and
+  relative-look controls are not available.
 - **HD movie packs**: HD movie replacement needs FFmpeg. The game's own XMV
   movies play normally; an MP4 movie pack is ignored until an Android FFmpeg
   build is added.

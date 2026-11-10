@@ -596,6 +596,31 @@ void ControlsTab(bool& save) {
         ImGui::EndTable();
     }
     ImGui::Spacing();
+#ifdef __ANDROID__
+    ImGui::SeparatorText("Controls");
+    ImGui::TextWrapped("The on-screen pad, a controller, or both together play as player 1:");
+    ImGui::Spacing();
+    static const char* kAndroidKeys[][2] = {
+        {"Touch: left stick", "Move"},
+        {"Touch: right stick", "Camera"},
+        {"Touch: D-pad / faces", "D-pad, A, B, X, Y"},
+        {"Touch: shoulders", "White / black, left / right trigger"},
+        {"Touch: MENU", "Open or close this menu"},
+        {"Start + Back (controller)", "Open or close this menu"},
+        {"L3 + R3 (controller)", "Show or hide the touch controls"},
+        {"Back (system)", "Open or close this menu"},
+    };
+    if (ImGui::BeginTable("keys", 2, ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerV)) {
+        for (auto& k : kAndroidKeys) {
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn();
+            ImGui::TextUnformatted(k[0]);
+            ImGui::TableNextColumn();
+            ImGui::TextUnformatted(k[1]);
+        }
+        ImGui::EndTable();
+    }
+#else
     ImGui::SeparatorText("Keyboard");
     ImGui::TextWrapped("Xbox, PlayStation and Switch controllers work as player 1. The keyboard plays alongside:");
     ImGui::Spacing();
@@ -622,6 +647,7 @@ void ControlsTab(bool& save) {
         }
         ImGui::EndTable();
     }
+#endif
 }
 
 // for looking into how a screen is drawn: a capture of the frame behind the menu
@@ -749,6 +775,11 @@ void Style(float scale) {
     c[ImGuiCol_CheckMark] = {0.95f, 0.80f, 0.45f, 1};
     c[ImGuiCol_NavHighlight] = {0.95f, 0.80f, 0.45f, 1};
     st.ScaleAllSizes(scale);
+#ifdef __ANDROID__
+    // A finger needs a wider scrollbar than a mouse pointer's 14 px; it is always on screen on the pages' child.
+    st.ScrollbarSize *= 1.7f;
+    st.GrabMinSize = std::max(st.GrabMinSize, 26.0f);
+#endif
 }
 
 }  // namespace
@@ -770,19 +801,41 @@ void MenuWindow() {
     ImGuiIO& io = ImGui::GetIO();
     io.Fonts->Clear();
 #ifdef __ANDROID__
-    // Android has no Segoe UI; ImGui's embedded ProggyClean keeps the menu usable.
-    ImFontConfig cfg;
-    cfg.SizePixels = 18.0f * scale;
-    io.Fonts->AddFontDefault(&cfg);
+    // A phone or tablet is held close, so its menu text is ~30 px on a 1080p screen and the style around it is scaled
+    // to match; ImGui's 13 px default made every setting hard to read. The system sans font is used when present, as
+    // it is far more legible than the embedded bitmap font; that stays the fallback.
+    // the game window's pixels, not the desktop's, which can still be reported in the boot rotation
+    const float height = app::WindowPixels().height ? app::WindowPixels().height : app::Desktop().height;
+    scale = std::clamp(height / 1080.0f, 0.85f, 2.0f);
+    const float font_size = 30.0f * scale;
+    bool font_loaded = false;
+    for (const char* path : {"/system/fonts/Roboto-Regular.ttf", "/system/fonts/NotoSans-Regular.ttf",
+                             "/system/fonts/DroidSans.ttf"}) {
+        FILE* file = std::fopen(path, "rb");
+        if (!file) continue;
+        std::fclose(file);
+        if (io.Fonts->AddFontFromFileTTF(path, font_size)) {
+            font_loaded = true;
+            break;
+        }
+    }
+    if (!font_loaded) {
+        ImFontConfig cfg;
+        cfg.SizePixels = font_size;
+        io.Fonts->AddFontDefault(&cfg);
+    }
+    Style(1.5f * scale);
+    io.FontGlobalScale = 1.0f;
+    g_font_scale = g_ui_scale = 1.5f * scale;
 #else
     if (!io.Fonts->AddFontFromFileTTF("C:\\Windows\\Fonts\\segoeui.ttf", 20.0f * scale)) {
         ImFontConfig cfg;
         cfg.SizePixels = 13.0f * scale;
         io.Fonts->AddFontDefault(&cfg);
     }
-#endif
     Style(scale);
     g_font_scale = g_ui_scale = scale;
+#endif
     g_scaled = true;
 }
 
@@ -823,13 +876,17 @@ void MenuToRenderer() {
 }
 
 void MenuUi(double fps) {
+    bool opened_here = false;  // Android's Start + Back opened it this frame: Start must not also close it at once
 #ifdef __ANDROID__
     // Start + Back on a physical controller opens/closes this menu, as the touch overlay's MENU does.
     {
         static bool was = false;
         input::Pad p = input::Raw(0);
         bool now = (p.buttons & 0x10) && (p.buttons & 0x20);
-        if (now && !was) g_open = !g_open;
+        if (now && !was) {
+            g_open = !g_open;
+            opened_here = g_open.load();
+        }
         was = now;
     }
 #endif
@@ -838,14 +895,18 @@ void MenuUi(double fps) {
     if (!g_scaled) return;
     PollKeys();
     ImGuiIO& io = ImGui::GetIO();
+#ifndef __ANDROID__
     // A window on a high-resolution monitor can be much smaller than the desktop.
     // Keep its settings tabs and dropdowns within the actual client area.
+    // Android's UI scale is fixed in MenuWindow instead: recomputing it here shrank the menu back to 1.0 on a 1080p
+    // screen, which is what made its font so small.
     const float ui_scale = std::clamp(io.DisplaySize.y / 1080.0f, 0.75f, g_font_scale);
     if (std::fabs(ui_scale - g_ui_scale) > 0.001f) {
         Style(ui_scale);
         io.FontGlobalScale = ui_scale / g_font_scale;
         g_ui_scale = ui_scale;
     }
+#endif
     {
         std::lock_guard lock(g_click_m);
         if (g_click_wait >= 0 && g_marks.Click(g_click)) {
@@ -924,7 +985,7 @@ void MenuUi(double fps) {
         g_marks.Write(0);
         return;
     }
-    if (start_hit || (b_hit && !busy_was)) {
+    if ((start_hit && !opened_here) || (b_hit && !busy_was)) {
         g_open = shown = false;
         g_marks.Write(0);
         return;
@@ -932,7 +993,12 @@ void MenuUi(double fps) {
 
     // at the screen's right, nearly its height: the game's picture stays in view beside it
     float margin = io.DisplaySize.y * 0.03f;
+#ifdef __ANDROID__
+    // With the larger font the menu needs more width; it still leaves a good part of the game's picture in view.
+    ImVec2 size{std::min(io.DisplaySize.x * 0.64f, io.DisplaySize.y * 1.06f), io.DisplaySize.y - 2 * margin};
+#else
     ImVec2 size{std::min(io.DisplaySize.y * 0.8f, io.DisplaySize.x * 0.45f), io.DisplaySize.y - 2 * margin};
+#endif
     ImGui::SetNextWindowPos({io.DisplaySize.x - margin, io.DisplaySize.y * 0.5f}, ImGuiCond_Always, {1.0f, 0.5f});
     ImGui::SetNextWindowSize(size, ImGuiCond_Always);
     // the menu takes the focus as it opens (keys and pads drive it). Taking it every frame put the D-pad's and arrow
@@ -953,8 +1019,15 @@ void MenuUi(double fps) {
         bool save = false;
         const ImGuiStyle& st = ImGui::GetStyle();
         float line = ImGui::GetTextLineHeightWithSpacing();
+#ifdef __ANDROID__
+        float help_h = line * 4 + st.WindowPadding.y * 2;  // the larger, wrapped help needs one more line
+#else
         float help_h = line * 3 + st.WindowPadding.y * 2;
+#endif
         float footer = help_h + st.ItemSpacing.y + line + st.ItemSpacing.y * 2 + ImGui::GetFrameHeightWithSpacing();
+#ifdef __ANDROID__
+        footer += line;  // the touch/controller hint wraps to two lines at the larger font
+#endif
         // the pages; the shoulders turn them as a tab bar's arrows would
         static int page = 0;
         int want = -1;
@@ -962,8 +1035,20 @@ void MenuUi(double fps) {
         if (lb_hit) want = (page + kPages - 1) % kPages;
         if (rb_hit) want = (page + 1) % kPages;
         auto flags = [&](int i) { return want == i ? ImGuiTabItemFlags_SetSelected : ImGuiTabItemFlags_None; };
-        // its items one list with the buttons below for the D-pad (NavFlattened)
-        if (ImGui::BeginChild("tabs", {0, -footer}, ImGuiChildFlags_NavFlattened)) {
+        // its items one list with the buttons below for the D-pad (NavFlattened); Android also keeps the page's
+        // scrollbar on screen, as a finger has no wheel
+        ImGuiWindowFlags page_flags = 0;
+#ifdef __ANDROID__
+        page_flags |= ImGuiWindowFlags_AlwaysVerticalScrollbar;
+#endif
+        if (ImGui::BeginChild("tabs", {0, -footer}, ImGuiChildFlags_NavFlattened, page_flags)) {
+#ifdef __ANDROID__
+            // A finger dragging the page scrolls it, since touch produces mouse motion but no wheel. A slider, a
+            // button or the scrollbar under the finger holds the active item, so only the page itself moves.
+            if (ImGui::IsMouseDragging(ImGuiMouseButton_Left) && !ImGui::IsAnyItemActive() &&
+                ImGui::IsWindowHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem))
+                ImGui::SetScrollY(ImGui::GetScrollY() - ImGui::GetIO().MouseDelta.y);
+#endif
             if (ImGui::BeginTabBar("tabbar", ImGuiTabBarFlags_FittingPolicyScroll)) {
                 bool display = ImGui::BeginTabItem("Display", nullptr, flags(0));
                 g_marks.Mark("tab.Display");
@@ -1026,9 +1111,16 @@ void MenuUi(double fps) {
         ImGui::EndChild();
         ImGui::PopStyleColor();
         // the controller's buttons, by the layout's names
+#ifdef __ANDROID__
+        ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+        ImGui::TextWrapped("Touch: tap a setting, or drag the page to scroll. Controller: D-pad move, A choose, B back, "
+                           "LB / RB page, Start close.");
+        ImGui::PopStyleColor();
+#else
         ImGui::TextDisabled(g_button_layout == 1
                                 ? "Controller: D-pad move, Cross choose, Circle back, L1 / R1 page, Options close"
                                 : "Controller: D-pad move, A choose, B back, LB / RB page, Start close");
+#endif
         ImGui::Separator();
         bool reset = ImGui::Button("Reset to defaults");
         g_marks.Mark("Reset to defaults");
@@ -1037,7 +1129,11 @@ void MenuUi(double fps) {
             save = true;
         }
         ImGui::SameLine();
+#ifdef __ANDROID__
+        std::string close = "Close";
+#else
         std::string close = "Close (" + KeyName(g_menu_key) + ")";
+#endif
         float close_w = ImGui::CalcTextSize(close.c_str()).x + st.FramePadding.x * 2;
         ImGui::SetCursorPosX(ImGui::GetWindowContentRegionMax().x - close_w);
         if (ImGui::Button(close.c_str())) open = false;

@@ -60,10 +60,10 @@ void MergeTouchPad(int port, input::Pad& pad) {
 
 }  // namespace noble_android
 
-// The pad hook the game calls: keyboard/controller first, touch last.
+// The pad hook the game calls. KeyboardPad merges the touch overlay itself, before the
+// modern camera dead zones and modes, so touch and a controller share one input path.
 void NoblePad(int port, input::Pad& pad) {
     KeyboardPad(port, pad);
-    noble_android::MergeTouchPad(port, pad);
 }
 
 extern "C" JNIEXPORT void JNICALL

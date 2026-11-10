@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.9.7c — Android camera and menu fixes (2026-11-10)
+
+- Give the touch pad and the settings menu separate controller shortcuts on Android: **L3 + R3** shows or hides the touch pad, while **Start + Back** (and the touch **MENU** button, or the system **Back** button) opens or closes the settings menu. PC keeps L3 + R3 for the menu.
+- Bring the Android controls to parity with the PC camera systems: Classic, RE2 Remake-style over-the-shoulder and first-person are selectable from the Controls tab, with the same dead zones, shoulder/distance/first-person offsets and immediate Camera-section X/Y inversion. The touch pad's right stick is merged before the dead zones and camera processing, so touch and a physical controller share one camera path.
+- Make the Android settings menu readable and scrollable: ~30 px system font and 1.5x control sizes, a wider panel, an always-visible wide scrollbar, touch drag-to-scroll, and controller/D-pad navigation. The touch pad now steps aside for menus opened by a controller, not only by its own MENU button, so touch menu input is never blocked.
+- v0.9.7c updates the Android APK and source archive. The Windows x64 and Linux x86_64 packages are unchanged from v0.9.7b and are attached to this release as well; no PC game code changed in this version.
+
 ## v0.9.7b — Native Android, Linux and Windows release
 
 - Add a native arm64 Android host built from the same recompiled Xbox game and advanced renderer. Direct3D 12 runs on Vulkan through a patched vkd3d with mobile descriptor heaps.

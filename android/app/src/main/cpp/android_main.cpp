@@ -320,7 +320,8 @@ int main(int argc, char** argv) {
 
     SDL_SetHint(SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS, "1");
     SDL_SetHint(SDL_HINT_ANDROID_BLOCK_ON_PAUSE, "1");
-    // Our own finger handler feeds ImGui once per touch; SDL's synthetic mouse would double it.
+    // SDL's touch-to-mouse bridge feeds the ImGui menu: one pointer with mouse motion and a left button, so taps
+    // choose settings and drags can scroll the page (menu.cpp).
     SDL_SetHint(SDL_HINT_TOUCH_MOUSE_EVENTS, "1");
     SDL_SetHint(SDL_HINT_APP_NAME, linuxapp::Utf8(app::kGame.title).c_str());
     if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD)) {

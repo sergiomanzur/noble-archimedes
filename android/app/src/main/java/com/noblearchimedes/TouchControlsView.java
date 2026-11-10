@@ -76,16 +76,18 @@ public class TouchControlsView extends View {
     private static final int C_L3 = 16, C_R3 = 17;
     private static final int C_LSTICK = 100, C_RSTICK = 101, C_BUBBLE = 200;
 
+    // The native menu can open from Start + Back, the system Back key or this view's MENU button. Poll it while the
+    // game is up so the pad steps aside whichever way it was opened, and comes back when it closes.
     private final Runnable pollMenu = new Runnable() {
         @Override public void run() {
-            if (!menuOpen) return;
-            boolean still = true;
+            boolean open = false;
             try {
-                still = NobleActivity.nativeMenuOpen();
+                open = NobleActivity.nativeMenuOpen();
             } catch (UnsatisfiedLinkError ignored) {
             }
-            if (!still) onMenuClosed();
-            else handler.postDelayed(this, 300);
+            if (open && !menuOpen) onMenuOpened();
+            else if (!open && menuOpen) onMenuClosed();
+            handler.postDelayed(this, 250);
         }
     };
 
@@ -184,13 +186,11 @@ public class TouchControlsView extends View {
         visibleBeforeMenu = controlsVisible;
         releaseAll();
         invalidate();
-        handler.postDelayed(pollMenu, 300);
     }
 
     public void onMenuClosed() {
         if (!menuOpen) return;
         menuOpen = false;
-        handler.removeCallbacks(pollMenu);
         if (menuAutoHidden) controlsVisible = visibleBeforeMenu;
         invalidate();
     }
@@ -207,6 +207,8 @@ public class TouchControlsView extends View {
     @Override protected void onAttachedToWindow() {
         super.onAttachedToWindow();
         send();
+        handler.removeCallbacks(pollMenu);
+        handler.postDelayed(pollMenu, 250);
     }
 
     @Override protected void onDetachedFromWindow() {

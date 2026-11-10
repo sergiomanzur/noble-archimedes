@@ -1,15 +1,15 @@
 # Noble Archimedes
 
-**Latest beta: [v0.9.7b](https://github.com/sergiomanzur/noble-archimedes/releases/tag/v0.9.7b).** Native Windows x64, Linux x86_64 and Android arm64 builds of the advanced renderer. The game compiles locally on first run from your own Xbox files. See the [changelog](CHANGELOG.md), [modern PC controls](docs/MODERN_PC_CONTROLS.md) and [Android guide](android/README.md).
+**Latest beta: [v0.9.7c](https://github.com/sergiomanzur/noble-archimedes/releases/tag/v0.9.7c).** The Android camera, shortcut and menu update. Native Windows x64, Linux x86_64 and Android arm64 builds of the advanced renderer are available; the Windows and Linux packages are unchanged from v0.9.7b. The game compiles locally on first run from your own Xbox files. See the [changelog](CHANGELOG.md), [modern PC controls](docs/MODERN_PC_CONTROLS.md) and [Android guide](android/README.md).
 
 | Platform | Download | Notes |
 | --- | --- | --- |
-| Windows x64 | [Noble-Archimedes-0.9.7b-Windows-x64.zip](https://github.com/sergiomanzur/noble-archimedes/releases/download/v0.9.7b/Noble-Archimedes-0.9.7b-Windows-x64.zip) | Tested USA host; Direct3D 12. |
-| Linux x86_64 | [Noble-Archimedes-0.9.7b-Linux-x86_64.AppImage](https://github.com/sergiomanzur/noble-archimedes/releases/download/v0.9.7b/Noble-Archimedes-0.9.7b-Linux-x86_64.AppImage) | USA release; Vulkan through vkd3d; glibc 2.35 or later. |
-| Android arm64 | [Noble-Archimedes-0.9.7b-Android-arm64.apk](https://github.com/sergiomanzur/noble-archimedes/releases/download/v0.9.7b/Noble-Archimedes-0.9.7b-Android-arm64.apk) | Android 8.0 (API 26) or later. Bring your own game data; see the [Android guide](android/README.md). |
-| Source | [Noble-Archimedes-0.9.7b-Source.zip](https://github.com/sergiomanzur/noble-archimedes/releases/download/v0.9.7b/Noble-Archimedes-0.9.7b-Source.zip) | Project, patched SDK and dependency sources. |
+| Windows x64 | [Noble-Archimedes-0.9.7b-Windows-x64.zip](https://github.com/sergiomanzur/noble-archimedes/releases/download/v0.9.7c/Noble-Archimedes-0.9.7b-Windows-x64.zip) | Tested USA host; Direct3D 12. Unchanged from v0.9.7b. |
+| Linux x86_64 | [Noble-Archimedes-0.9.7b-Linux-x86_64.AppImage](https://github.com/sergiomanzur/noble-archimedes/releases/download/v0.9.7c/Noble-Archimedes-0.9.7b-Linux-x86_64.AppImage) | USA release; Vulkan through vkd3d; glibc 2.35 or later. Unchanged from v0.9.7b. |
+| Android arm64 | [Noble-Archimedes-0.9.7c-Android-arm64.apk](https://github.com/sergiomanzur/noble-archimedes/releases/download/v0.9.7c/Noble-Archimedes-0.9.7c-Android-arm64.apk) | Android 8.0 (API 26) or later. Camera modes, separate shortcuts and a larger scrollable menu. Bring your own game data; see the [Android guide](android/README.md). |
+| Source | [Noble-Archimedes-0.9.7c-Source.zip](https://github.com/sergiomanzur/noble-archimedes/releases/download/v0.9.7c/Noble-Archimedes-0.9.7c-Source.zip) | Project, patched SDK and dependency sources. |
 
-All downloads are bring-your-own-game builds: no disc image, game executable, game assets or generated game implementation is included. The Android port adds a branded splash and launcher icon, a complete touch pad with controller-aware auto-hide, and SDL3 support for USB, Bluetooth and built-in handheld controllers (Retroid Pocket 6, AYN Thor and similar).
+All downloads are bring-your-own-game builds: no disc image, game executable, game assets or generated game implementation is included. The Android port adds a branded splash and launcher icon, a complete touch pad with controller-aware auto-hide, and SDL3 support for USB, Bluetooth and built-in handheld controllers (Retroid Pocket 6, AYN Thor and similar). Windows and Linux are the same binaries as v0.9.7b; only the Android APK and source archive were rebuilt for v0.9.7c.
 
 <img src="assets/noble/noble-icon.png" width="112" alt="Original Noble Archimedes astrolabe emblem">
 
@@ -28,7 +28,7 @@ Targets: Windows x64 with Direct3D 12, Linux x86_64 with Vulkan, and Android arm
 
 The build helper verifies the upstream snapshot, prepares an isolated working copy and fetches the pinned open-source SDK. Game code is generated locally from your XBE. The launcher and game are written to `output/jmafort-port/out/build/release/` as `NobleArchimedesLauncher.exe` and `NobleArchimedes.exe`. Primary CMake targets and generated game-DLL names use `NobleArchimedes*`; some internal window classes, logs and settings retain upstream compatibility names. See [BUILDING.md](BUILDING.md) for input validation, EU preparation, alternate asset paths and the experimental PS2 workflow.
 
-The Windows beta uses the advanced renderer. A native Linux x86_64 AppImage is in the [latest release](https://github.com/sergiomanzur/noble-archimedes/releases/tag/v0.9.7b); contributor build instructions remain in [BUILDING.md](BUILDING.md#native-linux-and-advanced-graphics-preview).
+The Windows beta uses the advanced renderer. A native Linux x86_64 AppImage is in the [latest release](https://github.com/sergiomanzur/noble-archimedes/releases/tag/v0.9.7c); contributor build instructions remain in [BUILDING.md](BUILDING.md#native-linux-and-advanced-graphics-preview).
 
 ## Xbox features and validation
 

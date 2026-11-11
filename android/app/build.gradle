@@ -24,8 +24,8 @@ android {
         applicationId 'com.noblearchimedes.game'
         minSdk 26
         targetSdk 34
-        versionCode 908
-        versionName '0.9.7c'
+        versionCode 909
+        versionName '0.9.7d'
 
         ndk {
             abiFilters 'arm64-v8a'

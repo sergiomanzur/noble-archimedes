@@ -78,6 +78,8 @@ void LogHostTrace() {
     }
 }
 
+struct sigaction g_old_action[32];
+
 // Guest registers and return addresses into the log, then a host stack.
 void Crash(int sig, siginfo_t* info, void*) {
     static std::atomic<bool> once{false};
@@ -94,8 +96,9 @@ void Crash(int sig, siginfo_t* info, void*) {
         LogHostTrace();
         logx::Flush();
     }
-    signal(sig, SIG_DFL);
-    raise(sig);
+    // hand the fault back to Android's own handler, which writes the tombstone (and GWP-ASan's report)
+    sigaction(sig, &g_old_action[sig & 31], nullptr);
+    if (sig == SIGABRT) raise(sig);
 }
 
 void DumpThreads() {
@@ -304,8 +307,12 @@ int main(int argc, char** argv) {
     struct sigaction sa{};
     sa.sa_sigaction = app::Crash;
     sa.sa_flags = SA_SIGINFO;
-    for (int sig : {SIGSEGV, SIGBUS, SIGILL, SIGFPE, SIGABRT}) sigaction(sig, &sa, nullptr);
+    for (int sig : {SIGSEGV, SIGBUS, SIGILL, SIGFPE, SIGABRT}) sigaction(sig, &sa, &app::g_old_action[sig & 31]);
     signal(SIGPIPE, SIG_IGN);
+
+    // F3 (adb: input keyevent 131) captures the frame's targets into files/captures, for diagnosing the output.
+    setenv("XBE_CAPTURE_DIR", (app::ExeDir() / "captures").string().c_str(), 1);
+    setenv("XBE_CAPTURE_ALL", "1", 1);
 
     // One log a session, under the app's external files directory.
     logx::Init((app::ExeDir() / "logs").string(), app::kGame.log, false);

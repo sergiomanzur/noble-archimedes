@@ -63,6 +63,7 @@ public class TouchControlsView extends View {
     private int buttons;
     private int[] analog = new int[8];
     private int lx, ly, rx, ry;
+    private int extraFaceButtons;
 
     private static final class Active {
         int control;   // 0 none, 1..N buttons, 100 left stick, 101 right stick, 200 bubble
@@ -198,8 +199,17 @@ public class TouchControlsView extends View {
     public void releaseAll() {
         active.clear();
         buttons = 0;
+        extraFaceButtons = 0;
         for (int i = 0; i < analog.length; i++) analog[i] = 0;
         lx = ly = rx = ry = 0;
+        send();
+        invalidate();
+    }
+
+    /** A/B/X/Y as XInput's digital masks, merged with the pad's analog buttons. */
+    public void setFaceButtons(int mask) {
+        if (mask == extraFaceButtons) return;
+        extraFaceButtons = mask;
         send();
         invalidate();
     }
@@ -580,7 +590,7 @@ public class TouchControlsView extends View {
     }
 
     private void send() {
-        int b = 0, a = 0, bb = 0, x = 0, y = 0, black = 0, white = 0, lt = 0, rt = 0;
+        int b = extraFaceButtons, a = 0, bb = 0, x = 0, y = 0, black = 0, white = 0, lt = 0, rt = 0;
         for (int i = 0; i < active.size(); i++) {
             switch (active.valueAt(i).control) {
                 case C_DUP: b |= PAD_UP; break;
@@ -591,10 +601,10 @@ public class TouchControlsView extends View {
                 case C_BACK: b |= PAD_BACK; break;
                 case C_L3: b |= PAD_L3; break;
                 case C_R3: b |= PAD_R3; break;
-                case C_A: a = 255; break;
-                case C_B: bb = 255; break;
-                case C_X: x = 255; break;
-                case C_Y: y = 255; break;
+                case C_A: a = 255; b |= 0x1000; break;
+                case C_B: bb = 255; b |= 0x2000; break;
+                case C_X: x = 255; b |= 0x4000; break;
+                case C_Y: y = 255; b |= 0x8000; break;
                 case C_LB: white = 255; break;
                 case C_RB: black = 255; break;
                 case C_LT: lt = 255; break;
@@ -608,7 +618,7 @@ public class TouchControlsView extends View {
         analog[4] = black; analog[5] = white; analog[6] = lt; analog[7] = rt;
         try {
             NobleActivity.nativeSetTouchPad(b, a, bb, x, y, black, white, lt, rt, lx, ly, rx, ry,
-                    controlsVisible && !menuOpen);
+                    (controlsVisible && !menuOpen) || extraFaceButtons != 0);
         } catch (UnsatisfiedLinkError ignored) {
         }
     }

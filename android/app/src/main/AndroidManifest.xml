@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
-    android:versionCode="908"
-    android:versionName="0.9.7c"
+    android:versionCode="909"
+    android:versionName="0.9.7d"
     android:installLocation="auto">
 
     <!-- Touch controls and physical controllers -->
@@ -25,6 +25,20 @@
         android:theme="@style/NobleTheme"
         android:enableOnBackInvokedCallback="false">
 
+        <!-- First-run setup: picks the game's .iso/.xiso, then starts the game. -->
+        <activity
+            android:name=".SetupActivity"
+            android:label="@string/app_name"
+            android:launchMode="singleTask"
+            android:screenOrientation="sensorLandscape"
+            android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboard|keyboardHidden|navigation|uiMode|density"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
         <activity
             android:name=".NobleActivity"
             android:label="@string/app_name"
@@ -34,11 +48,6 @@
             android:configChanges="layoutDirection|locale|grammaticalGender|fontScale|fontWeightAdjustment|orientation|uiMode|screenLayout|screenSize|smallestScreenSize|keyboard|keyboardHidden|navigation|density"
             android:preferMinimalPostProcessing="true"
             android:exported="true">
-
-            <intent-filter>
-                <action android:name="android.intent.action.MAIN" />
-                <category android:name="android.intent.category.LAUNCHER" />
-            </intent-filter>
 
             <intent-filter>
                 <action android:name="android.hardware.usb.action.USB_DEVICE_ATTACHED" />

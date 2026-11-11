@@ -61,6 +61,52 @@ void WaitEvent(HANDLE handle) {
     e->set = false;
 }
 
+#ifdef __ANDROID__
+namespace {
+
+// The Adreno driver's vkCmdPushDescriptorSetKHR frees one of its own objects and then uses it again, writing into memory
+// that has gone to someone else: vkd3d's objects (a texture's, a render target's) turn up with their first word zeroed,
+// and a frame draws nothing or the title screen comes out black, on some starts and not others. vkd3d uses push
+// descriptors for the root constant buffers only when the device offers the extension, and works without it, so the
+// device is not shown it: vkd3d is handed a vkGetInstanceProcAddr whose device extension list lacks it.
+PFN_vkGetInstanceProcAddr g_real_get_instance_proc = nullptr;
+VkInstance g_filter_instance = VK_NULL_HANDLE;
+
+VKAPI_ATTR VkResult VKAPI_CALL EnumerateDeviceExtensionsWithoutPush(VkPhysicalDevice pd, const char* layer, uint32_t* count,
+                                                                    VkExtensionProperties* props) {
+    auto real = reinterpret_cast<PFN_vkEnumerateDeviceExtensionProperties>(
+            g_real_get_instance_proc(g_filter_instance, "vkEnumerateDeviceExtensionProperties"));
+    if (!real) return VK_ERROR_INITIALIZATION_FAILED;
+    uint32_t n = 0;
+    VkResult r = real(pd, layer, &n, nullptr);
+    if (r != VK_SUCCESS) return r;
+    std::vector<VkExtensionProperties> all(n);
+    r = real(pd, layer, &n, all.data());
+    if (r != VK_SUCCESS && r != VK_INCOMPLETE) return r;
+    all.resize(n);
+    std::vector<VkExtensionProperties> kept;
+    for (const VkExtensionProperties& e : all)
+        if (std::strcmp(e.extensionName, VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME) != 0) kept.push_back(e);
+    if (!props) {
+        *count = uint32_t(kept.size());
+        return VK_SUCCESS;
+    }
+    uint32_t copied = std::min<uint32_t>(*count, uint32_t(kept.size()));
+    for (uint32_t i = 0; i < copied; i++) props[i] = kept[i];
+    *count = copied;
+    return copied < kept.size() ? VK_INCOMPLETE : VK_SUCCESS;
+}
+
+VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL InstanceProcWithoutPush(VkInstance instance, const char* name) {
+    if (instance != VK_NULL_HANDLE) g_filter_instance = instance;
+    if (name && !std::strcmp(name, "vkEnumerateDeviceExtensionProperties") && instance != VK_NULL_HANDLE)
+        return reinterpret_cast<PFN_vkVoidFunction>(&EnumerateDeviceExtensionsWithoutPush);
+    return g_real_get_instance_proc(instance, name);
+}
+
+}  // namespace
+#endif
+
 bool CreateDevice(const std::string& want, ID3D12Device** device, std::string& name) {
     // the instance with the window system's surface extensions, so a swap chain can be made on its device
     Uint32 n_ext = 0;
@@ -75,6 +121,10 @@ bool CreateDevice(const std::string& want, ID3D12Device** device, std::string& n
     ici.wchar_size = sizeof(WCHAR);
     ici.instance_extensions = exts;
     ici.instance_extension_count = n_ext;
+#ifdef __ANDROID__
+    if ((g_real_get_instance_proc = reinterpret_cast<PFN_vkGetInstanceProcAddr>(SDL_Vulkan_GetVkGetInstanceProcAddr())))
+        ici.pfn_vkGetInstanceProcAddr = InstanceProcWithoutPush;
+#endif
 
     // HDR colour spaces for the window's swap chain, and what NVIDIA DLSS asks for when its files are there
     // (linux/dlss_vk.h), where the driver has them

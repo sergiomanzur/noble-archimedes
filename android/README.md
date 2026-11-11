@@ -75,27 +75,28 @@ and the one mobile patch are documented in
 
 ## Install the game data
 
-The app reads from its external files directory:
+Start the app once. With no game installed it opens Android's file picker: choose
+your Castlevania: Curse of Darkness disc image (`.iso` or `.xiso`, USA release).
+The app copies it once into its own storage (about 3 GB, with a progress bar),
+checks that it is an Xbox disc image, and starts the game. Keep about 3.5 GB free.
 
-```
-/sdcard/Android/data/com.noblearchimedes.game/files/assets/
-```
-
-Push the game once (about 3 GB; USB transfer is fastest):
+To use the extracted disc instead, or to skip the copy, push the files to the
+app's `assets` folder (about 3 GB; USB transfer is fastest):
 
 ```powershell
 $adb = "$env:LOCALAPPDATA\Android\Sdk\platform-tools\adb.exe"
-& $adb shell mkdir -p /sdcard/Android/data/com.noblearchimedes.game/files/assets
-& $adb push "extracted\default.xbe" "/sdcard/Android/data/com.noblearchimedes.game/files/assets/"
-& $adb push "extracted\data"       "/sdcard/Android/data/com.noblearchimedes.game/files/assets/"
-& $adb push "extracted\movie"      "/sdcard/Android/data/com.noblearchimedes.game/files/assets/"
-& $adb push "extracted\sound"      "/sdcard/Android/data/com.noblearchimedes.game/files/assets/"
+$assets = "/sdcard/Android/data/com.noblearchimedes.game/files/assets"
+& $adb shell mkdir -p $assets/data $assets/movie $assets/sound/bgm $assets/sound/se
+& $adb push "extracted\default.xbe" "$assets/"
+& $adb push "extracted\data\."  "$assets/data/"
+& $adb push "extracted\movie\." "$assets/movie/"
+& $adb push "extracted\sound\." "$assets/sound/"
 ```
 
-If `adb push` cannot create the nested folders, make them first with
-`adb shell mkdir -p`, or push a tar and extract it in the app's `assets`
-directory. Saves, settings, logs and the generated `hdd/` live beside
-`assets/`; HD texture packs go in `files/textures/` if you use them.
+The folders must exist before `adb push` can fill them. Saves, settings, logs and
+the generated `hdd/` live beside `assets/`; HD texture packs go in
+`files/textures/` if you use them. To pick a different disc image later, empty
+the `assets` folder and start the app again.
 
 ## Controls
 

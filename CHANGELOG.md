@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.9.7d — Android first-run file picker and black-title fix (2026-11-11)
+
+- Add a first-run setup screen to the Android app. When no game is installed it opens Android's file picker, copies the chosen `.iso` or `.xiso` into the app's storage with a progress bar, checks that it is an Xbox disc image, and starts the game. Pushing extracted files with adb still works and is used when present.
+- Fix the title screen (and sometimes later screens) coming up black on Adreno phones and handhelds. The Adreno Vulkan driver frees one of its own objects inside `vkCmdPushDescriptorSetKHR` and then writes to it, which corrupts whatever object has taken that memory, such as a texture or render target the game is about to draw. The Android build now hides `VK_KHR_push_descriptor` from vkd3d, which falls back to ordinary descriptor sets.
+- Add a one-minute safety net: if the game surface still shows no picture a minute after launch, the app restarts itself (twice at most). It stops watching for good once a picture has been shown.
+- Android debugging aids: F3 saves the frame's targets and the shaders into `files/captures/` (adb: `input keyevent 131`), and a crash now reaches Android's own handler, so tombstones and GWP-ASan reports reach `logcat`.
+- Add `tools/repack_android_java.py` to rebuild only the Java, resources and manifest of an existing APK.
+
 ## v0.9.7c — Android camera and menu fixes (2026-11-10)
 
 - Give the touch pad and the settings menu separate controller shortcuts on Android: **L3 + R3** shows or hides the touch pad, while **Start + Back** (and the touch **MENU** button, or the system **Back** button) opens or closes the settings menu. PC keeps L3 + R3 for the menu.

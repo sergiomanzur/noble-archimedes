@@ -72,12 +72,25 @@ public class SetupActivity extends Activity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        UpdateChecker.startIfNeeded(this);
         if (hasGame(assetsDir()) && !getIntent().getBooleanExtra("change", false)) {
             startGame();
             return;
         }
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         buildUi();
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        UpdateChecker.attach(this, copying);
+    }
+
+    @Override
+    protected void onPause() {
+        UpdateChecker.detach(this);
+        super.onPause();
     }
 
     private void startGame() {

@@ -165,7 +165,7 @@ def prepare(assets, eu_assets=None):
         for patch in ((frame_copy_patch,) if applied(donor_patch) else (donor_patch, frame_copy_patch)):
             run('git', '-C', SDK, 'apply', '--check', patch)
             run('git', '-C', SDK, 'apply', patch)
-    for name in ('live-controls.patch', 'wide-aspect.patch', 'movie-file-hook.patch'):
+    for name in ('live-controls.patch', 'wide-aspect.patch', 'movie-file-hook.patch', 'amd-gcn-vertex-stride.patch'):
         patch = ROOT / 'xbox/noble/sdk-patches' / name
         if not applied(patch):
             run('git', '-C', SDK, 'apply', '--check', patch)

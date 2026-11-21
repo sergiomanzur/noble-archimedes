@@ -16,7 +16,7 @@ import uuid
 import zipfile
 
 VERSION = (Path(__file__).resolve().parents[1] / 'VERSION').read_text(encoding='utf-8').strip()
-TITLE = f'Noble Archimedes Beta {VERSION}'
+TITLE = f'Noble Archimedes {VERSION}'
 SDK_PIN = '91146ff6e2a218b19c1109dc665d06020472ab57'
 DONOR_PIN = '1d9edf6b2bdbb683cb95dff5b317916aec31db84'
 REDIST_FILES = ('msvcp140.dll', 'vcruntime140.dll', 'vcruntime140_1.dll')

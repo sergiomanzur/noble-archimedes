@@ -1,0 +1,56 @@
+diff --git a/runtime/gpu/d3d12.cpp b/runtime/gpu/d3d12.cpp
+index aee266e..cfdf6ea 100644
+--- a/runtime/gpu/d3d12.cpp
++++ b/runtime/gpu/d3d12.cpp
+@@ -2851,9 +2851,23 @@ void D3D12Backend::UploadVertexBuffers(const Assembled& a) {
+     D3D12_VERTEX_BUFFER_VIEW vbv[16];
+     for (uint32_t i = 0; i < a.buffer_count; i++) {
+         const VertexBuffer& b = a.buffers[i];
+-        Alloc vb = Upload(b.bytes, 16);
++        uint32_t n = b.stride ? b.bytes / b.stride : 0;
++        if (b.tail && n) {
++            uint32_t wide = b.stride + b.tail;
++            Alloc vb = Upload(size_t(n) * wide, 16);
++            for (uint32_t v = 0; v < n; v++) {
++                uint8_t* dst = vb.cpu + size_t(v) * wide;
++                size_t at = size_t(v) * b.stride, have = std::min<size_t>(wide, b.bytes - at);
++                std::memcpy(dst, b.src + at, have);
++                if (have < wide) std::memset(dst + have, 0, wide - have);
++            }
++            vbv[i] = {vb.gpu, n * wide, wide};
++            continue;
++        }
++        Alloc vb = Upload(b.bytes + b.tail, 16);
+         std::memcpy(vb.cpu, b.src, b.bytes);
+-        vbv[i] = {vb.gpu, b.bytes, b.stride};
++        if (b.tail) std::memset(vb.cpu + b.bytes, 0, b.tail);
++        vbv[i] = {vb.gpu, b.bytes + b.tail, b.stride};
+     }
+     cl_->IASetVertexBuffers(0, a.buffer_count, vbv);
+ }
+diff --git a/runtime/gpu/vertex.cpp b/runtime/gpu/vertex.cpp
+index 4fa29f2..f5a53c6 100644
+--- a/runtime/gpu/vertex.cpp
++++ b/runtime/gpu/vertex.cpp
+@@ -365,6 +365,8 @@ bool AssembleRaw(const State& s, const Inputs& inputs, const DrawRange& d, Assem
+         HostElement he = HostFormat(in.type);
+         out.elements[size_t(reg)] = {he.format, uint8_t(slot[in.stream]), uint16_t(in.offset)};
+         out.decode |= uint64_t(he.decode) << (reg * 4);
++        VertexBuffer& b = out.buffers[size_t(slot[in.stream])];
++        if (in.offset + he.bytes > b.stride) b.tail = std::max(b.tail, in.offset + he.bytes - b.stride);
+     }
+     out.vertex_count = dense ? d.span : d.count;
+     if (NativePrimitive(d.prim)) return DrawNative(d, dense, out);
+diff --git a/runtime/gpu/vertex.h b/runtime/gpu/vertex.h
+index 6bd6d0b..7ffb01e 100644
+--- a/runtime/gpu/vertex.h
++++ b/runtime/gpu/vertex.h
+@@ -23,6 +23,8 @@ enum VertexDecode : uint8_t {
+ struct VertexBuffer {
+     const uint8_t* src = nullptr;
+     uint32_t bytes = 0, stride = 0;
++    // Element overhang past vertex stride (AMD GCN fix, jmafort/CastlevaniaCOD-PC ccd5000).
++    uint32_t tail = 0;
+ };
+ 
+ // where input register r comes from: host vertex format (a DXGI_FORMAT), buffer, byte offset in the vertex

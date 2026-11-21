@@ -19,18 +19,23 @@
 #include <dwmapi.h>
 #include <dxgi1_6.h>
 #include <shellapi.h>
+#include <urlmon.h>
 #include <wincodec.h>
+#include <wininet.h>
 #include <wrl/client.h>
 
 #include <algorithm>
-#include <cmath>
 #include <atomic>
+#include <cctype>
+#include <cmath>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
+#include <cwchar>
 #include <filesystem>
 #include <fstream>
-#include <cwchar>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <vector>
 
@@ -379,6 +384,536 @@ struct Import {
     }
 };
 
+// GitHub auto-updater (sergiomanzur/noble-archimedes): checks GitHub Releases when the launcher opens,
+// downloads and verifies the Windows release ZIP by size and SHA-256, replaces program files via atomic
+// rename into update\previous (keeping user saves, assets, textures and settings), and restarts the launcher.
+constexpr const char* kUpdateApi = "https://api.github.com/repos/sergiomanzur/noble-archimedes/releases?per_page=10";
+constexpr const char* kVersionFile = "version.txt";
+
+struct PortRelease {
+    std::string tag;        // without leading 'v'
+    std::string date;       // published YYYY-MM-DD
+    std::string published;  // full ISO-8601 timestamp
+    std::string page;       // GitHub release html_url
+    std::string url;        // asset browser_download_url
+    std::string asset;      // asset filename
+    std::string sha256;     // lowercase hex SHA-256 from GitHub asset digest
+    uint64_t size = 0;
+};
+
+enum class UpdateState {
+    Idle, Off, Developer, Checking, Unreachable, Busy, UpToDate, Available, Downloading, Installing, Restart, Failed
+};
+
+std::string OwnRelease() {
+    std::ifstream f(ExeDir() / kVersionFile);
+    std::string v;
+    if (!f || !std::getline(f, v)) return {};
+    while (!v.empty() && (v.back() == '\r' || v.back() == ' ' || v.back() == '\t')) v.pop_back();
+    while (!v.empty() && (v.front() == ' ' || v.front() == '\t')) v.erase(v.begin());
+    if (!v.empty() && (v[0] == 'v' || v[0] == 'V')) v.erase(v.begin());
+    return v;
+}
+
+// Compares release version strings such as "0.9.7d", "1.0", "1.0.0", "1.0.1", "1.10.0".
+// Returns >0 if a > b, <0 if a < b, 0 if equivalent.
+int CompareReleaseVersions(std::string a, std::string b) {
+    auto parse = [](std::string s, std::vector<uint32_t>& nums, std::string& suffix) -> bool {
+        while (!s.empty() && (s.front() == ' ' || s.front() == '\t')) s.erase(s.begin());
+        while (!s.empty() && (s.back() == ' ' || s.back() == '\t')) s.pop_back();
+        if (!s.empty() && (s[0] == 'v' || s[0] == 'V')) s.erase(s.begin());
+        size_t i = 0;
+        while (i < s.size()) {
+            if (!std::isdigit(static_cast<unsigned char>(s[i]))) break;
+            uint32_t n = 0;
+            while (i < s.size() && std::isdigit(static_cast<unsigned char>(s[i]))) {
+                if (n < 1000000) n = n * 10 + uint32_t(s[i] - '0');
+                i++;
+            }
+            nums.push_back(n);
+            if (i < s.size() && s[i] == '.') {
+                i++;
+            } else {
+                break;
+            }
+        }
+        if (nums.empty()) return false;
+        suffix = s.substr(i);
+        for (char& c : suffix) c = char(std::tolower(static_cast<unsigned char>(c)));
+        return true;
+    };
+    std::vector<uint32_t> xa, xb;
+    std::string sa, sb;
+    if (!parse(a, xa, sa) || !parse(b, xb, sb)) return a == b ? 0 : (a < b ? -1 : 1);
+    size_t n = (std::max)(xa.size(), xb.size());
+    xa.resize(n, 0);
+    xb.resize(n, 0);
+    for (size_t i = 0; i < n; i++) {
+        if (xa[i] != xb[i]) return xa[i] > xb[i] ? 1 : -1;
+    }
+    if (sa == sb) return 0;
+    if (sa.empty()) return 1;   // final release > suffixed/pre-release of same number
+    if (sb.empty()) return -1;
+    return sa > sb ? 1 : -1;
+}
+
+namespace json {
+
+std::string Value(std::string_view obj, std::string_view key) {
+    std::string quoted = "\"" + std::string(key) + "\"";
+    size_t at = 0;
+    while ((at = obj.find(quoted, at)) != std::string_view::npos) {
+        size_t p = at + quoted.size();
+        while (p < obj.size() && (obj[p] == ' ' || obj[p] == '\t' || obj[p] == '\n' || obj[p] == '\r')) p++;
+        if (p >= obj.size() || obj[p] != ':') {
+            at = p;
+            continue;
+        }
+        p++;
+        while (p < obj.size() && (obj[p] == ' ' || obj[p] == '\t' || obj[p] == '\n' || obj[p] == '\r')) p++;
+        if (p >= obj.size()) return {};
+        if (obj[p] == '"') {
+            std::string out;
+            for (p++; p < obj.size() && obj[p] != '"'; p++) {
+                if (obj[p] == '\\' && p + 1 < obj.size()) {
+                    char e = obj[++p];
+                    out += e == 'n' ? '\n' : e == 't' ? '\t' : e == 'r' ? '\r' : e;
+                } else {
+                    out += obj[p];
+                }
+            }
+            return out;
+        }
+        size_t e = p;
+        while (e < obj.size() && obj[e] != ',' && obj[e] != '}' && obj[e] != ']' && obj[e] != ' ' && obj[e] != '\n' &&
+               obj[e] != '\r')
+            e++;
+        return std::string(obj.substr(p, e - p));
+    }
+    return {};
+}
+
+std::vector<std::string_view> Objects(std::string_view obj, size_t from) {
+    std::vector<std::string_view> out;
+    if (from >= obj.size() || obj[from] != '[') return out;
+    int depth = 0;
+    size_t start = 0;
+    bool in_string = false;
+    for (size_t i = from + 1; i < obj.size(); i++) {
+        char c = obj[i];
+        if (in_string) {
+            if (c == '\\') i++;
+            else if (c == '"') in_string = false;
+            continue;
+        }
+        if (c == '"') in_string = true;
+        else if (c == '{' || c == '[') {
+            if (depth++ == 0) start = i;
+        } else if (c == '}' || c == ']') {
+            if (depth == 0) break;
+            if (--depth == 0) out.push_back(obj.substr(start, i + 1 - start));
+        }
+    }
+    return out;
+}
+
+std::vector<std::string_view> Array(std::string_view obj, std::string_view key) {
+    std::string quoted = "\"" + std::string(key) + "\"";
+    size_t at = obj.find(quoted);
+    if (at == std::string_view::npos) return {};
+    size_t p = obj.find('[', at);
+    return p == std::string_view::npos ? std::vector<std::string_view>{} : Objects(obj, p);
+}
+
+}  // namespace json
+
+bool OwnPackage(const std::string& name) {
+    std::string low = name;
+    for (char& c : low) c = char(std::tolower(static_cast<unsigned char>(c)));
+    constexpr std::string_view kPrefix = "noble-archimedes-";
+    constexpr std::string_view kSuffix = "-windows-x64.zip";
+    return low.size() > kPrefix.size() + kSuffix.size() && low.compare(0, kPrefix.size(), kPrefix) == 0 &&
+           low.compare(low.size() - kSuffix.size(), kSuffix.size(), kSuffix) == 0;
+}
+
+bool NewestRelease(const std::string& list, PortRelease& out) {
+    bool found = false;
+    for (std::string_view r : json::Objects(list, list.find('['))) {
+        if (json::Value(r, "draft") == "true" || json::Value(r, "prerelease") == "true") continue;
+        PortRelease rel;
+        rel.tag = json::Value(r, "tag_name");
+        if (!rel.tag.empty() && (rel.tag[0] == 'v' || rel.tag[0] == 'V')) rel.tag.erase(rel.tag.begin());
+        if (rel.tag.empty()) continue;
+        std::string published = json::Value(r, "published_at");
+        rel.date = published.size() >= 10 ? published.substr(0, 10) : published;
+        rel.page = json::Value(r, "html_url");
+        for (std::string_view a : json::Array(r, "assets")) {
+            std::string name = json::Value(a, "name");
+            if (!OwnPackage(name)) continue;
+            rel.asset = name;
+            rel.url = json::Value(a, "browser_download_url");
+            rel.size = std::strtoull(json::Value(a, "size").c_str(), nullptr, 10);
+            std::string digest = json::Value(a, "digest");
+            if (digest.compare(0, 7, "sha256:") == 0) {
+                rel.sha256 = digest.substr(7);
+                for (char& c : rel.sha256) c = char(std::tolower(static_cast<unsigned char>(c)));
+            }
+            break;
+        }
+        if (rel.url.empty() || rel.sha256.empty()) continue;
+        if (!found || published > out.published) {
+            out = rel;
+            out.published = published;
+            found = true;
+        }
+    }
+    return found;
+}
+
+struct HttpAnswer {
+    int status = 0;
+    std::string location;
+};
+
+HttpAnswer HttpRequest(const std::string& url, const fs::path* to, bool follow) {
+    HttpAnswer a;
+    HINTERNET net = InternetOpenW(L"NobleArchimedesLauncher", INTERNET_OPEN_TYPE_PRECONFIG, nullptr, nullptr, 0);
+    if (!net) return a;
+    DWORD ms = 20000;
+    InternetSetOptionW(net, INTERNET_OPTION_CONNECT_TIMEOUT, &ms, sizeof(ms));
+    InternetSetOptionW(net, INTERNET_OPTION_RECEIVE_TIMEOUT, &ms, sizeof(ms));
+    DWORD flags = INTERNET_FLAG_RELOAD | INTERNET_FLAG_NO_CACHE_WRITE | INTERNET_FLAG_PRAGMA_NOCACHE |
+                  INTERNET_FLAG_NO_COOKIES | INTERNET_FLAG_NO_UI | (follow ? 0 : INTERNET_FLAG_NO_AUTO_REDIRECT);
+    const wchar_t* headers = L"Accept: application/vnd.github+json\r\n";
+    if (HINTERNET h = InternetOpenUrlW(net, Wide(url).c_str(), headers, DWORD(-1), flags, 0)) {
+        DWORD code = 0, len = sizeof(code);
+        if (HttpQueryInfoW(h, HTTP_QUERY_STATUS_CODE | HTTP_QUERY_FLAG_NUMBER, &code, &len, nullptr)) a.status = int(code);
+        std::wstring loc(2048, L'\0');
+        len = DWORD(loc.size() * sizeof(wchar_t));
+        if (HttpQueryInfoW(h, HTTP_QUERY_LOCATION, loc.data(), &len, nullptr)) {
+            loc.resize(len / sizeof(wchar_t));
+            a.location = Utf8(loc);
+        }
+        if (to && a.status == 200) {
+            std::ofstream f(*to, std::ios::binary);
+            std::vector<char> buf(1 << 16);
+            DWORD n = 0;
+            while (InternetReadFile(h, buf.data(), DWORD(buf.size()), &n) && n) f.write(buf.data(), std::streamsize(n));
+            if (!f) a.status = 0;
+        }
+        InternetCloseHandle(h);
+    }
+    InternetCloseHandle(net);
+    return a;
+}
+
+bool GitHubBusy(int status) { return status == 403 || status == 429 || status == 503; }
+
+std::string UpdateApiUrl() {
+    if (const char* override_url = std::getenv("NOBLE_UPDATE_API"))
+        if (*override_url) return override_url;
+    return kUpdateApi;
+}
+
+UpdateState LookUpLatest(const std::string& own, PortRelease& out) {
+    std::error_code ec;
+    fs::path dir = ExeDir() / "update";
+    fs::create_directories(dir, ec);
+    fs::path list = dir / "releases.json";
+    HttpAnswer a = HttpRequest(UpdateApiUrl(), &list, true);
+    std::string text;
+    {
+        std::ifstream f(list, std::ios::binary);
+        text.assign(std::istreambuf_iterator<char>(f), {});
+    }
+    fs::remove(list, ec);
+    if (GitHubBusy(a.status)) return UpdateState::Busy;
+    if (a.status != 200 || !NewestRelease(text, out)) return UpdateState::Unreachable;
+    return CompareReleaseVersions(out.tag, own) > 0 ? UpdateState::Available : UpdateState::UpToDate;
+}
+
+std::string Sha256File(const fs::path& file) {
+    std::ifstream f(file, std::ios::binary);
+    BCRYPT_HASH_HANDLE h = nullptr;
+    if (!f || BCryptCreateHash(BCRYPT_SHA256_ALG_HANDLE, &h, nullptr, 0, nullptr, 0, 0) != 0) return {};
+    std::vector<char> buf(1 << 20);
+    bool ok = true;
+    while (ok && f) {
+        f.read(buf.data(), std::streamsize(buf.size()));
+        if (f.gcount() > 0)
+            ok = BCryptHashData(h, reinterpret_cast<PUCHAR>(buf.data()), ULONG(f.gcount()), 0) == 0;
+    }
+    uint8_t digest[32];
+    ok = ok && BCryptFinishHash(h, digest, 32, 0) == 0;
+    BCryptDestroyHash(h);
+    if (!ok) return {};
+    std::string hex;
+    for (uint8_t b : digest) {
+        hex += "0123456789abcdef"[b >> 4];
+        hex += "0123456789abcdef"[b & 15];
+    }
+    return hex;
+}
+
+bool UpdateKeeps(const fs::path& rel) {
+    static const char* const kKeep[] = {"assets", "textures", "hdd", "logs", "streamline", "movies", "mods",
+                                        "saves",  "castlevania.toml", "update", "backup"};
+    std::string first = rel.begin()->string();
+    for (char& c : first) c = char(std::tolower(static_cast<unsigned char>(c)));
+    for (const char* k : kKeep)
+        if (first == k) return true;
+    return false;
+}
+
+int PutInPlace(const fs::path& from, const fs::path& game, const fs::path& previous, const std::string& tag) {
+    std::error_code ec;
+    fs::remove_all(previous, ec);
+    fs::create_directories(previous, ec);
+    std::vector<fs::path> moved;
+    int failed = 0;
+    for (auto& e : fs::recursive_directory_iterator(from, ec)) {
+        if (!e.is_regular_file(ec)) continue;
+        fs::path rel = fs::relative(e.path(), from, ec);
+        if (ec || UpdateKeeps(rel)) continue;
+        if (rel.begin()->string() == "compiler" && std::next(rel.begin()) != rel.end() &&
+            std::next(rel.begin())->string() == "work")
+            continue;
+        fs::path target = game / rel;
+        if (fs::exists(target, ec)) {
+            fs::create_directories((previous / rel).parent_path(), ec);
+            fs::rename(target, previous / rel, ec);
+            if (ec) {
+                failed = ec.value() ? ec.value() : 1;
+                break;
+            }
+            moved.push_back(rel);
+        }
+        fs::create_directories(target.parent_path(), ec);
+        fs::rename(e.path(), target, ec);
+        if (ec) {
+            failed = ec.value() ? ec.value() : 1;
+            break;
+        }
+    }
+    if (failed) {
+        for (const fs::path& rel : moved) {
+            fs::remove(game / rel, ec);
+            fs::rename(previous / rel, game / rel, ec);
+        }
+        return failed;
+    }
+    for (const char* d : {"assets", "textures"})
+        if (!fs::exists(game / d, ec) && fs::exists(from / d, ec))
+            fs::copy(from / d, game / d, fs::copy_options::recursive, ec);
+    std::ofstream v(game / kVersionFile);
+    v << tag << "\n";
+    return 0;
+}
+
+fs::path PackageFolder(const fs::path& unpacked) {
+    std::error_code ec;
+    int folders = 0, files = 0;
+    fs::path only, from = unpacked;
+    for (auto& e : fs::directory_iterator(unpacked, ec)) {
+        if (e.is_directory(ec)) {
+            folders++;
+            only = e.path();
+        } else {
+            files++;
+        }
+    }
+    if (folders == 1 && files == 0) from = only;
+    if (!fs::exists(from / L"NobleArchimedesLauncher.exe", ec) || !fs::exists(from / L"NobleArchimedes.exe", ec))
+        return {};
+    return from;
+}
+
+bool ExtractZip(const fs::path& zip, const fs::path& into) {
+    wchar_t sys[MAX_PATH];
+    GetSystemDirectoryW(sys, MAX_PATH);
+    std::wstring cmd = L"\"" + std::wstring(sys) + L"\\tar.exe\" -xf \"" + zip.wstring() + L"\" -C \"" + into.wstring() + L"\"";
+    STARTUPINFOW si{sizeof(si)};
+    PROCESS_INFORMATION pi{};
+    if (!CreateProcessW(nullptr, cmd.data(), nullptr, nullptr, FALSE, CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi))
+        return false;
+    WaitForSingleObject(pi.hProcess, INFINITE);
+    DWORD code = 1;
+    GetExitCodeProcess(pi.hProcess, &code);
+    CloseHandle(pi.hThread);
+    CloseHandle(pi.hProcess);
+    return code == 0;
+}
+
+struct Updater {
+    using State = UpdateState;
+    std::atomic<State> state{State::Idle};
+    std::atomic<float> progress{0};
+    PortRelease latest;
+    std::string own;
+    std::string error;
+    bool game_open = false;
+    std::thread worker;
+
+    struct Progress : IBindStatusCallback {
+        std::atomic<float>* out;
+        float from, span;
+        HRESULT STDMETHODCALLTYPE QueryInterface(REFIID id, void** p) override {
+            if (id == IID_IUnknown || id == IID_IBindStatusCallback) {
+                *p = this;
+                return S_OK;
+            }
+            *p = nullptr;
+            return E_NOINTERFACE;
+        }
+        ULONG STDMETHODCALLTYPE AddRef() override { return 1; }
+        ULONG STDMETHODCALLTYPE Release() override { return 1; }
+        HRESULT STDMETHODCALLTYPE OnStartBinding(DWORD, IBinding*) override { return S_OK; }
+        HRESULT STDMETHODCALLTYPE GetPriority(LONG*) override { return E_NOTIMPL; }
+        HRESULT STDMETHODCALLTYPE OnLowResource(DWORD) override { return S_OK; }
+        HRESULT STDMETHODCALLTYPE OnProgress(ULONG done, ULONG total, ULONG, LPCWSTR) override {
+            if (total) *out = from + span * float(double(done) / double(total));
+            return S_OK;
+        }
+        HRESULT STDMETHODCALLTYPE OnStopBinding(HRESULT, LPCWSTR) override { return S_OK; }
+        HRESULT STDMETHODCALLTYPE GetBindInfo(DWORD*, BINDINFO*) override { return S_OK; }
+        HRESULT STDMETHODCALLTYPE OnDataAvailable(DWORD, DWORD, FORMATETC*, STGMEDIUM*) override { return S_OK; }
+        HRESULT STDMETHODCALLTYPE OnObjectAvailable(REFIID, IUnknown*) override { return S_OK; }
+    };
+
+    bool Busy() const {
+        State s = state;
+        return s == State::Checking || s == State::Downloading || s == State::Installing;
+    }
+
+    static bool FetchFresh(const std::wstring& url, const fs::path& to, std::atomic<float>& progress, float from,
+                           float span, HRESULT& hr) {
+        DeleteUrlCacheEntryW(url.c_str());
+        Progress p{};
+        p.out = &progress;
+        p.from = from;
+        p.span = span;
+        fs::path part = to;
+        part += L".part";
+        hr = URLDownloadToFileW(nullptr, url.c_str(), part.c_str(), 0, &p);
+        std::error_code ec;
+        if (FAILED(hr) || fs::file_size(part, ec) == 0) {
+            fs::remove(part, ec);
+            if (SUCCEEDED(hr)) hr = E_FAIL;
+            return false;
+        }
+        fs::remove(to, ec);
+        fs::rename(part, to, ec);
+        if (ec) hr = HRESULT_FROM_WIN32(ec.value());
+        return !ec;
+    }
+
+    void Check(bool enabled) {
+        if (Busy()) return;
+        if (worker.joinable()) worker.join();
+        own = OwnRelease();
+        if (!enabled) {
+            state = State::Off;
+            return;
+        }
+        if (own.empty()) {
+            state = State::Developer;
+            return;
+        }
+        state = State::Checking;
+        worker = std::thread([this] {
+            PortRelease r;
+            State result = LookUpLatest(own, r);
+            if (result == State::Available || result == State::UpToDate) latest = r;
+            state = result;
+        });
+    }
+
+    static bool GameClosed() {
+        for (const wchar_t* exe : {L"NobleArchimedes.exe", L"NobleArchimedesEU.exe"}) {
+            fs::path p = ExeDir() / exe;
+            std::error_code ec;
+            if (!fs::exists(p, ec)) continue;
+            HANDLE h = CreateFileW(p.c_str(), GENERIC_READ | GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, 0, nullptr);
+            if (h == INVALID_HANDLE_VALUE) return false;
+            CloseHandle(h);
+        }
+        return true;
+    }
+
+    void Apply() {
+        if (Busy() || state != State::Available) return;
+        if (worker.joinable()) worker.join();
+        state = State::Downloading;
+        progress = 0;
+        error.clear();
+        game_open = false;
+        PortRelease r = latest;
+        worker = std::thread([this, r] {
+            CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+            std::error_code ec;
+            fs::path game = ExeDir(), dir = game / L"update", unpacked = dir / L"unpacked";
+            fs::remove_all(unpacked, ec);
+            fs::create_directories(dir, ec);
+            fs::path zip = dir / Wide(r.asset);
+            HRESULT hr = S_OK;
+            bool ok = !r.sha256.empty();
+            if (!ok) hr = TRUST_E_BAD_DIGEST;
+            ok = ok && FetchFresh(Wide(r.url), zip, progress, 0, 0.9f, hr);
+            if (ok && ((r.size && fs::file_size(zip, ec) != r.size) || Sha256File(zip) != r.sha256)) {
+                ok = false;
+                hr = TRUST_E_BAD_DIGEST;
+            }
+            if (ok) {
+                state = State::Installing;
+                fs::create_directories(unpacked, ec);
+                ok = ExtractZip(zip, unpacked);
+                if (!ok) hr = E_FAIL;
+            }
+            fs::path from = ok ? PackageFolder(unpacked) : fs::path();
+            if (ok && from.empty()) {
+                ok = false;
+                hr = E_INVALIDARG;
+            }
+            if (ok && !GameClosed()) {
+                ok = false;
+                game_open = true;
+                hr = HRESULT_FROM_WIN32(ERROR_SHARING_VIOLATION);
+            }
+            if (ok) {
+                if (int e = PutInPlace(from, game, dir / L"previous", r.tag)) {
+                    ok = false;
+                    hr = HRESULT_FROM_WIN32(e);
+                } else {
+                    progress = 0.98f;
+                }
+            }
+            fs::remove_all(unpacked, ec);
+            if (ok) fs::remove(zip, ec);
+            progress = 1;
+            if (!ok) error = std::to_string(uint32_t(hr));
+            CoUninitialize();
+            state = ok ? State::Restart : State::Failed;
+        });
+    }
+
+    bool Restart() const {
+        fs::path exe = ExeDir() / L"NobleArchimedesLauncher.exe";
+        std::wstring cmd = L"\"" + exe.wstring() + L"\" --updated " + Wide(latest.tag);
+        STARTUPINFOW si{sizeof(si)};
+        PROCESS_INFORMATION pi{};
+        if (!CreateProcessW(exe.c_str(), cmd.data(), nullptr, nullptr, FALSE, 0, nullptr, ExeDir().c_str(), &si, &pi))
+            return false;
+        AllowSetForegroundWindow(pi.dwProcessId);
+        CloseHandle(pi.hThread);
+        CloseHandle(pi.hProcess);
+        return true;
+    }
+
+    ~Updater() {
+        if (worker.joinable()) worker.join();
+    }
+};
+
 // The European release's languages, as the console's (XGetLanguage), each by its name in itself; the USA release
 // plays English
 struct GameLanguage {
@@ -411,6 +946,7 @@ struct Settings {
     uint32_t menu_key = VK_F10;
     bool launcher_music = true;    // original launcher theme, independent of game audio
     bool keep_open = false;        // the launcher's own
+    bool update_check = true;      // check GitHub Releases when the launcher opens
     std::string language = "en";   // the launcher's own too, a code of words.h
     uint32_t game_language = 1;    // the European release's, as the console's (XGetLanguage): kGameLanguages
     bool texture_pack = true;
@@ -443,6 +979,7 @@ struct Settings {
         menu_key = rest["menu_key"].value_or(menu_key);
         launcher_music = rest["launcher_music"].value_or(launcher_music);
         keep_open = rest["launcher_keep_open"].value_or(keep_open);
+        update_check = rest["launcher_update_check"].value_or(update_check);
         language = rest["launcher_language"].value_or(language);
         game_language = rest["game_language"].value_or(GameLanguageFor(language));
         texture_pack = rest["texture_pack"].value_or(texture_pack);
@@ -473,6 +1010,7 @@ struct Settings {
         rest.insert_or_assign("menu_key", int64_t(menu_key));
         rest.insert_or_assign("launcher_music", launcher_music);
         rest.insert_or_assign("launcher_keep_open", keep_open);
+        rest.insert_or_assign("launcher_update_check", update_check);
         rest.insert_or_assign("launcher_language", language);
         rest.insert_or_assign("game_language", int64_t(game_language));
         rest.insert_or_assign("texture_pack", texture_pack);
@@ -498,6 +1036,7 @@ struct Settings {
         d.rest = std::move(rest);
         d.launcher_music = launcher_music;
         d.keep_open = keep_open;
+        d.update_check = update_check;
         d.language = language;
         d.game_language = game_language;
         *this = std::move(d);
@@ -1152,9 +1691,16 @@ public:
         modes_ = Resolutions();
         LoadArt();
         UpdateMusic();  // ShowWindow has already completed in wWinMain.
+        std::error_code ec;
+        fs::remove_all(ExeDir() / L"update" / L"previous", ec);
+        updater_.Check(settings_.update_check && !std::getenv("CV_NO_UPDATE_CHECK"));
     }
 
     ~Launcher() { Shutdown(); }
+
+    void Updated(const std::string& tag) {
+        if (!tag.empty()) updated_to_ = tag;
+    }
 
     void Shutdown() {
         PlaySoundW(nullptr, nullptr, 0);
@@ -1211,6 +1757,13 @@ public:
         ImGui::End();
         AutoSave();
         UpdateMusic();
+        if (updater_.state == Updater::State::Restart) {
+            updater_.state = Updater::State::Idle;
+            PlaySoundW(nullptr, nullptr, 0);
+            music_playing_ = false;
+            if (updater_.Restart()) keep = false;
+            else Note(F("The update failed (error {}): check the connection and try again.", {std::to_string(GetLastError())}));
+        }
         return keep;
     }
 
@@ -1221,7 +1774,7 @@ private:
         return s.display_mode + "|" + std::to_string(s.width) + "x" + std::to_string(s.height) + "|" +
                std::to_string(s.render_percent) + "|" + std::to_string(s.aniso) + "|" + std::to_string(s.vsync) +
                std::to_string(s.widescreen) + std::to_string(s.fps_counter) + std::to_string(s.pause_on_focus_loss) +
-               std::to_string(s.keep_open) + std::to_string(s.launcher_music) + "|" + std::to_string(s.menu_key) + "|" + std::to_string(s.texture_pack) +
+               std::to_string(s.keep_open) + std::to_string(s.update_check) + std::to_string(s.launcher_music) + "|" + std::to_string(s.menu_key) + "|" + std::to_string(s.texture_pack) +
                std::to_string(s.texture_pack_size) + "|" + std::to_string(s.button_layout) +
                std::to_string(s.sprint) + "|" + std::to_string(s.fov) + "|" + std::to_string(s.draw_distance) + "|" +
                std::to_string(s.fog_distance) + "|" + std::to_string(s.hud_edges) + std::to_string(s.ps2_stick) + "|" +
@@ -1388,6 +1941,8 @@ private:
             EndCard();
         }
 
+        UpdateCard();
+
         // the HD texture pack: whether there is one, and its switch, a click before Play (its size is on Graphics); one
         // row, the button's height
         BeginCard("pack", S(12));
@@ -1447,6 +2002,81 @@ private:
         std::string tip = F("In game, press {} or click both sticks (L3 + R3) for these settings.", {KeyName(settings_.menu_key)});
         Wrapped(g_small, kMuted, tip.c_str());
         return keep;
+    }
+
+    void UpdateCard() {
+        using State = Updater::State;
+        State st = updater_.state;
+        BeginCard("update", S(12));
+        float row = S(38), y = ImGui::GetCursorPosY(), mid = y + (row - g_semi->FontSize) * 0.5f;
+        ImGui::SetCursorPosY(mid);
+        Text(g_semi, kText, T("Updates"));
+        ImGui::SameLine(0, S(26));
+        const PortRelease& r = updater_.latest;
+        bool buttons = st == State::Available || st == State::Failed;
+        ImGui::SetCursorPosY(mid);
+        if (!updated_to_.empty() && (st == State::UpToDate || st == State::Checking || st == State::Idle)) {
+            Status(kIconCheck, kGreen, F("Updated to {}. The game builds its code again on its next start.", {updated_to_}));
+        } else {
+            switch (st) {
+                case State::Off: Status(kIconCheck, kMuted, T("Update checks are off.")); break;
+                case State::Developer: Status(kIconCheck, kMuted, T("Development build: no update checks.")); break;
+                case State::Checking: Status(kIconGlobe, kMuted, T("Checking for updates...")); break;
+                case State::Unreachable: Status(kIconWarn, kAmber, T("Could not reach GitHub to check for updates.")); break;
+                case State::Busy: Status(kIconWarn, kAmber, T("GitHub is busy right now: wait a few minutes and try again.")); break;
+                case State::UpToDate: Status(kIconCheck, kGreen, F("Up to date ({})", {updater_.own})); break;
+                case State::Available:
+                    Status(kIconWarn, kAmber,
+                           F("Update available: {} (you have {})", {r.tag + (r.date.empty() ? "" : ", " + r.date), updater_.own}));
+                    break;
+                case State::Downloading:
+                    ImGui::SetCursorPosY(y + S(4));
+                    ImGui::ProgressBar(updater_.progress, {S(420), S(30)}, F("Downloading {}...", {r.asset}).c_str());
+                    break;
+                case State::Installing:
+                    ImGui::SetCursorPosY(y + S(4));
+                    ImGui::ProgressBar(updater_.progress, {S(420), S(30)}, T("Unpacking and installing..."));
+                    break;
+                case State::Restart: Status(kIconCheck, kGreen, T("Restarting the launcher...")); break;
+                case State::Failed:
+                    Status(kIconWarn, kRed,
+                           updater_.game_open ? T("Close the game before updating.")
+                                              : F("The update failed (error {}): check the connection and try again.", {updater_.error}));
+                    break;
+                default: break;
+            }
+        }
+        if (buttons) {
+            ImGui::Dummy({0, S(6)});
+            const char* update = T("Update");
+            const char* notes = T("Release notes");
+            float bw = g_italic->CalcTextSizeA(g_italic->FontSize, FLT_MAX, 0, update).x + S(40) + row * 0.6f;
+            float nw = g_italic->CalcTextSizeA(g_italic->FontSize, FLT_MAX, 0, notes).x + S(40) + row * 0.6f;
+            ImGui::BeginDisabled(import_.running);
+            if (Button(update, {bw, row}, Kind::Primary)) {
+                if (st == State::Failed) updater_.state = State::Available;
+                updater_.Apply();
+            }
+            ImGui::EndDisabled();
+            if (!r.page.empty()) {
+                ImGui::SameLine(0, S(10));
+                if (Button(notes, {nw, row}, Kind::Secondary)) Open(Wide(r.page));
+            }
+            ImGui::Dummy({0, S(4)});
+            Wrapped(g_small, kMuted, T("Your saves, settings and textures stay as they are. The game builds its code again on its next start."));
+        } else if (st == State::UpToDate || st == State::Unreachable || st == State::Busy || st == State::Off) {
+            const char* again = T("Check again");
+            float bw = g_italic->CalcTextSizeA(g_italic->FontSize, FLT_MAX, 0, again).x + S(40) + row * 0.6f;
+            ImGui::SameLine();
+            ImGui::SetCursorPos({ImGui::GetContentRegionMax().x - bw, y});
+            if (Button(again, {bw, row}, Kind::Secondary)) updater_.Check(true);
+            ImGui::SetCursorPosY(y + row);
+            ImGui::Dummy({0, 0});
+        } else {
+            ImGui::SetCursorPosY(y + row);
+            ImGui::Dummy({0, 0});
+        }
+        EndCard();
     }
 
     // the card the game will draw with: the one chosen, when it is here with Direct3D 12, else the automatic one
@@ -1644,6 +2274,10 @@ private:
         BeginSetting(T("Keep launcher open"), T("Leave this window open while the game runs."));
         ToggleRight("keep", settings_.keep_open);
         EndSetting();
+        BeginSetting(T("Check for updates on start"),
+                     T("Looks up the newest release on GitHub each time the launcher opens and offers it on the Home page. An update replaces only the program files: saves, settings and textures are never touched."));
+        ToggleRight("update_check", settings_.update_check);
+        EndSetting();
         EndCard();
     }
 
@@ -1838,6 +2472,8 @@ private:
     Picture background_, crest_;
     bool music_playing_ = false, music_suspended_ = false;
     Import import_;
+    Updater updater_;
+    std::string updated_to_;
     std::vector<Res> modes_;
     std::string status_, saved_, shown_language_;
     double status_time_ = -100;
@@ -1850,6 +2486,28 @@ private:
 int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int show) {
     SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
     CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);  // WIC, for original launcher artwork
+    // --update-check / --update-apply: headless GitHub check and update apply (exit 0 up-to-date/applied, 3 available,
+    // 2 developer build, 4 GitHub busy, 1 error); writes status to update\check.txt
+    if (std::wcsstr(GetCommandLineW(), L"--update-check") || std::wcsstr(GetCommandLineW(), L"--update-apply")) {
+        bool apply = std::wcsstr(GetCommandLineW(), L"--update-apply") != nullptr;
+        Updater u;
+        u.Check(true);
+        if (u.worker.joinable()) u.worker.join();
+        Updater::State s = u.state;
+        if (apply && s == Updater::State::Available) {
+            u.Apply();
+            if (u.worker.joinable()) u.worker.join();
+            s = u.state;
+        }
+        std::error_code ec;
+        fs::create_directories(ExeDir() / L"update", ec);
+        std::ofstream out(ExeDir() / L"update" / L"check.txt");
+        out << int(s) << " " << u.own << " " << u.latest.tag << " " << u.latest.asset << " " << u.error << "\n";
+        return s == Updater::State::UpToDate || s == Updater::State::Restart ? 0
+               : s == Updater::State::Available ? 3
+               : s == Updater::State::Developer ? 2
+               : s == Updater::State::Busy ? 4 : 1;
+    }
     float scale = float(GetDpiForSystem()) / 96.0f;
     {
         Settings settings;  // the language, for the window's title and an error before the launcher is up
@@ -1902,6 +2560,11 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int show) {
     static const wchar_t* kPageNames[] = {L"home", L"display", L"graphics", L"game", L"controls", L"files"};
     for (int i = 0; i < 6; i++)
         if (std::wcsstr(GetCommandLineW(), (std::wstring(L"--page ") + kPageNames[i]).c_str())) launcher.ShowPage(i);
+    if (const wchar_t* at = std::wcsstr(GetCommandLineW(), L"--updated ")) {
+        std::wstring tag(at + 10);
+        size_t end = tag.find(L' ');
+        launcher.Updated(Utf8(tag.substr(0, end)));
+    }
     bool running = true;
     while (running) {
         MSG msg;

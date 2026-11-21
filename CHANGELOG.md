@@ -1,5 +1,13 @@
 # Changelog
 
+## v1.0.0 — AMD GCN rendering fix and GitHub auto-updater (2026-11-21)
+
+- **AMD GCN rendering fix:** port the vertex-buffer re-striding fix from `jmafort/CastlevaniaCOD-PC` (`ccd5000`, issue #16) to all Noble Archimedes build paths (Windows D3D12, Linux vkd3d, Android vkd3d, and the standard Xbox build path). When a vertex declaration places an element past the stream's vertex stride (such as Castlevania's 2D draws declaring an unused second texture coordinate at byte 28 of 28-byte vertices), `AssembleRaw` records the overhang in `VertexBuffer::tail` and `D3D12Backend::UploadVertexBuffers` uploads the buffer at the widened stride (`stride + tail`), keeping every input element within its vertex record and fixing stretched/melted 2D quads and full-frame passes on AMD GCN cards (RX 400/500, Vega).
+- **Windows launcher auto-updater:** `NobleArchimedesLauncher.exe` now checks GitHub Releases (`sergiomanzur/noble-archimedes`) on startup and displays an **Updates** card on the Home page (with a **Check for updates on start** toggle on the Game page). Clicking **Update** downloads and SHA-256-verifies the latest Windows ZIP, atomically swaps program files while keeping `assets/`, `textures/`, `hdd/`, `logs/`, `movies/`, `mods/`, `saves/`, `streamline/`, `compiler/work/` and `castlevania.toml`, and restarts the launcher automatically.
+- **Linux launcher auto-updater:** `NobleArchimedesLauncher` now checks GitHub Releases on startup, downloads and SHA-256-verifies the latest Linux AppImage (or `.tar.xz`), extracts it with `--appimage-extract` without requiring FUSE, updates the writable installation in place while preserving user data, and restarts the launcher automatically.
+- **Android auto-updater:** on startup, the Android app checks GitHub Releases in the background, downloads and SHA-256-verifies any newer `Android-arm64.apk`, and prompts the user to install the update via a dedicated read-only `ContentProvider` (`UpdateApkProvider`) and Android's package installer (handling Android 8+ install-unknown-apps permission when needed).
+- Rebuild all four v1.0.0 artifacts: Windows x64 ZIP, Linux x86_64 AppImage, Android arm64 APK, and corresponding Source ZIP.
+
 ## v0.9.7d — Android first-run file picker and black-title fix (2026-11-11)
 
 - Add a first-run setup screen to the Android app. When no game is installed it opens Android's file picker, copies the chosen `.iso` or `.xiso` into the app's storage with a progress bar, checks that it is an Xbox disc image, and starts the game. Pushing extracted files with adb still works and is used when present.

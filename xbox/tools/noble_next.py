@@ -12,7 +12,7 @@ UPSTREAM = 'https://github.com/jmafort/CastlevaniaCOD-PC.git'
 UPSTREAM_PIN = 'e3d9d83b104f641c5064794156024421da5adcce'
 SDK_REPO = 'https://github.com/TGP482/XboxXBE-Recomp.git'
 SDK_PIN = '91146ff6e2a218b19c1109dc665d06020472ab57'
-WORK = ROOT / 'output' / ('noble-next' if os.name == 'nt' else 'noble-next-linux')
+WORK = Path(os.environ['NOBLE_NEXT_WORK']) if os.environ.get('NOBLE_NEXT_WORK') else ROOT / 'output' / ('noble-next' if os.name == 'nt' else 'noble-next-linux')
 PORT = WORK / 'port'
 SDK = WORK / 'sdk'
 
@@ -44,6 +44,70 @@ def replace(text, old, new):
 
 def write(name, text):
     (PORT / name).write_text(text, encoding='utf-8', newline='\n')
+
+
+def amd_gcn_vertex_stride_edits():
+    # Ported from jmafort/CastlevaniaCOD-PC ccd5000 (issue #16):
+    # Castlevania's 2D draws declare an unused second texcoord at byte 28 of 28-byte vertices.
+    # AMD GCN GPUs (RX 400/500, Vega) corrupt adjacent attributes when any element reaches past
+    # StrideInBytes, smearing quads into vertical streaks. Widen the uploaded stride by tail so
+    # every declared element stays strictly inside its vertex record.
+    return {
+        'gpu/vertex.h': [(
+            'struct VertexBuffer {\n'
+            '    const uint8_t* src = nullptr;\n'
+            '    uint32_t bytes = 0, stride = 0;\n'
+            '};',
+            'struct VertexBuffer {\n'
+            '    const uint8_t* src = nullptr;\n'
+            '    uint32_t bytes = 0, stride = 0;\n'
+            '    uint32_t tail = 0;\n'
+            '};')],
+        'gpu/vertex.cpp': [(
+            '        out.elements[size_t(reg)] = {he.format, uint8_t(slot[in.stream]), uint16_t(in.offset)};\n'
+            '        out.decode |= uint64_t(he.decode) << (reg * 4);\n'
+            '    }',
+            '        out.elements[size_t(reg)] = {he.format, uint8_t(slot[in.stream]), uint16_t(in.offset)};\n'
+            '        out.decode |= uint64_t(he.decode) << (reg * 4);\n'
+            '        VertexBuffer& b = out.buffers[size_t(slot[in.stream])];\n'
+            '        if (in.offset + he.bytes > b.stride) b.tail = std::max(b.tail, in.offset + he.bytes - b.stride);\n'
+            '    }')],
+        'gpu/d3d12.cpp': [(
+            'void D3D12Backend::UploadVertexBuffers(const Assembled& a) {\n'
+            '    D3D12_VERTEX_BUFFER_VIEW vbv[16];\n'
+            '    for (uint32_t i = 0; i < a.buffer_count; i++) {\n'
+            '        const VertexBuffer& b = a.buffers[i];\n'
+            '        Alloc vb = Upload(b.bytes, 16);\n'
+            '        std::memcpy(vb.cpu, b.src, b.bytes);\n'
+            '        vbv[i] = {vb.gpu, b.bytes, b.stride};\n'
+            '    }\n'
+            '    cl_->IASetVertexBuffers(0, a.buffer_count, vbv);\n'
+            '}',
+            'void D3D12Backend::UploadVertexBuffers(const Assembled& a) {\n'
+            '    D3D12_VERTEX_BUFFER_VIEW vbv[16];\n'
+            '    for (uint32_t i = 0; i < a.buffer_count; i++) {\n'
+            '        const VertexBuffer& b = a.buffers[i];\n'
+            '        uint32_t n = b.stride ? b.bytes / b.stride : 0;\n'
+            '        if (b.tail && n) {\n'
+            '            uint32_t wide = b.stride + b.tail;\n'
+            '            Alloc vb = Upload(size_t(n) * wide, 16);\n'
+            '            for (uint32_t v = 0; v < n; v++) {\n'
+            '                uint8_t* dst = vb.cpu + size_t(v) * wide;\n'
+            '                size_t at = size_t(v) * b.stride, have = std::min<size_t>(wide, b.bytes - at);\n'
+            '                std::memcpy(dst, b.src + at, have);\n'
+            '                if (have < wide) std::memset(dst + have, 0, wide - have);\n'
+            '            }\n'
+            '            vbv[i] = {vb.gpu, n * wide, wide};\n'
+            '            continue;\n'
+            '        }\n'
+            '        Alloc vb = Upload(b.bytes + b.tail, 16);\n'
+            '        std::memcpy(vb.cpu, b.src, b.bytes);\n'
+            '        if (b.tail) std::memset(vb.cpu + b.bytes, 0, b.tail);\n'
+            '        vbv[i] = {vb.gpu, b.bytes + b.tail, b.stride};\n'
+            '    }\n'
+            '    cl_->IASetVertexBuffers(0, a.buffer_count, vbv);\n'
+            '}')],
+    }
 
 
 def dlss_supersampling_edits():
@@ -152,13 +216,16 @@ def prepare(assets, eu_assets):
     patch = PORT / 'sdk-patches/xboxxbe-recomp.patch'
     if patch.read_text(encoding='utf-8') != upstream('sdk-patches/xboxxbe-recomp.patch'):
         raise RuntimeError('The upstream SDK patch was modified')
-    edits = dlss_supersampling_edits() if os.name == 'nt' else {}
+    edits = amd_gcn_vertex_stride_edits()
+    if os.name == 'nt':
+        for name, replacements in dlss_supersampling_edits().items():
+            edits.setdefault(name, []).extend(replacements)
     # The donor patch overlaps these hunks. On a rebuild, recognize Noble's
     # postimages and check the donor patch against the rest of the tree.
     excludes = []
     for name, replacements in edits.items():
         source = (SDK / 'runtime' / name).read_text(encoding='utf-8')
-        if all(new in source for _, new in replacements):
+        if any(new in source for _, new in replacements):
             excludes.append(f'--exclude=runtime/{name}')
     if subprocess.run(['git', '-C', str(SDK), 'apply', '-R', '--check', *excludes, str(patch)],
                       capture_output=True).returncode:
@@ -214,8 +281,165 @@ add_custom_command(TARGET NobleArchimedesLauncher POST_BUILD
     launcher = re.sub(r'\bCastlevaniaEU\b', 'NobleArchimedesEU', launcher)
     launcher = launcher.replace('"Castlevania.exe"', '"NobleArchimedes.exe"').replace('"Castlevania"', '"NobleArchimedes"')
     launcher = launcher.replace('Castlevania: Curse of Darkness - Launcher', 'Noble Archimedes - Launcher')
-    launcher = launcher.replace('updater_.Check(settings_.update_check && !std::getenv("CV_NO_UPDATE_CHECK"));',
-                                'updater_.Check(false);')
+    launcher = replace(launcher,
+                       '    std::error_code ec;\n'
+                       '    return fs::read_symlink("/proc/self/exe", ec).parent_path();',
+                       '    // Cache on first call: on Linux /proc/self/exe follows renames, so after\n'
+                       '    // PutInPlace moves the running launcher into update/previous/, re-reading\n'
+                       '    // it would point Restart() at the old executable instead of the updated one.\n'
+                       '    static const fs::path dir = [] {\n'
+                       '        std::error_code ec;\n'
+                       '        return fs::read_symlink("/proc/self/exe", ec).parent_path();\n'
+                       '    }();\n'
+                       '    return dir;')
+    launcher = replace(launcher,
+                       'constexpr const char* kUpdateRepo = "jmafort/CastlevaniaCOD-PC";\n'
+                       'constexpr const char* kUpdateApi = "https://api.github.com/repos/jmafort/CastlevaniaCOD-PC/releases?per_page=10";\n'
+                       'constexpr const char* kUpdateReleases = "https://github.com/jmafort/CastlevaniaCOD-PC/releases";',
+                       'constexpr const char* kUpdateRepo = "sergiomanzur/noble-archimedes";\n'
+                       'constexpr const char* kUpdateApi = "https://api.github.com/repos/sergiomanzur/noble-archimedes/releases?per_page=10";\n'
+                       'constexpr const char* kUpdateReleases = "https://github.com/sergiomanzur/noble-archimedes/releases";')
+    launcher = replace(launcher,
+                       'bool OwnPackage(const std::string& name) {\n'
+                       '    if (name.compare(0, 17, "CastlevaniaCOD-PC") != 0) return false;\n'
+                       '#ifdef _WIN32\n'
+                       '    return name.size() > 4 && name.compare(name.size() - 4, 4, ".zip") == 0 && name.find("linux") == std::string::npos;\n'
+                       '#else\n'
+                       '    constexpr std::string_view kEnd = "-linux.tar.xz";\n'
+                       '    return name.size() > kEnd.size() && name.compare(name.size() - kEnd.size(), kEnd.size(), kEnd) == 0;\n'
+                       '#endif\n'
+                       '}',
+                       'bool OwnPackage(const std::string& name) {\n'
+                       '    std::string low = name;\n'
+                       '    for (char& c : low) c = char(std::tolower(uint8_t(c)));\n'
+                       '    if (low.compare(0, 17, "noble-archimedes-") != 0) return false;\n'
+                       '#ifdef _WIN32\n'
+                       '    constexpr std::string_view kWin = "-windows-x64.zip";\n'
+                       '    return low.size() > kWin.size() && low.compare(low.size() - kWin.size(), kWin.size(), kWin) == 0;\n'
+                       '#else\n'
+                       '    constexpr std::string_view kApp = "-linux-x86_64.appimage";\n'
+                       '    constexpr std::string_view kTar = "-linux.tar.xz";\n'
+                       '    return (low.size() > kApp.size() && low.compare(low.size() - kApp.size(), kApp.size(), kApp) == 0) ||\n'
+                       '           (low.size() > kTar.size() && low.compare(low.size() - kTar.size(), kTar.size(), kTar) == 0);\n'
+                       '#endif\n'
+                       '}')
+    launcher = replace(launcher,
+                       'UpdateState LookUpLatest(const std::string& own, PortRelease& out) {\n'
+                       '    std::error_code ec;\n'
+                       '    fs::path dir = ExeDir() / "update";\n'
+                       '    fs::create_directories(dir, ec);\n'
+                       '    fs::path list = dir / "releases.json";\n'
+                       '    HttpAnswer a = HttpRequest(kUpdateApi, &list, true);\n'
+                       '    std::string text;\n'
+                       '    {\n'
+                       '        std::ifstream f(list, std::ios::binary);\n'
+                       '        text.assign(std::istreambuf_iterator<char>(f), {});\n'
+                       '    }\n'
+                       '    fs::remove(list, ec);\n'
+                       '    if (GitHubBusy(a.status)) return UpdateState::Busy;\n'
+                       '    if (a.status != 200 || !NewestRelease(text, out)) return UpdateState::Unreachable;\n'
+                       '    return out.tag == own ? UpdateState::UpToDate : UpdateState::Available;\n'
+                       '}',
+                       'int CompareReleaseVersions(std::string a, std::string b) {\n'
+                       '    auto parse = [](std::string s, std::vector<uint32_t>& nums, std::string& suffix) -> bool {\n'
+                       '        while (!s.empty() && (s.front() == \' \' || s.front() == \'\\t\')) s.erase(s.begin());\n'
+                       '        while (!s.empty() && (s.back() == \' \' || s.back() == \'\\t\')) s.pop_back();\n'
+                       '        if (!s.empty() && (s[0] == \'v\' || s[0] == \'V\')) s.erase(s.begin());\n'
+                       '        size_t i = 0;\n'
+                       '        while (i < s.size() && std::isdigit(uint8_t(s[i]))) {\n'
+                       '            uint32_t n = 0;\n'
+                       '            while (i < s.size() && std::isdigit(uint8_t(s[i]))) {\n'
+                       '                if (n < 1000000) n = n * 10 + uint32_t(s[i] - \'0\');\n'
+                       '                i++;\n'
+                       '            }\n'
+                       '            nums.push_back(n);\n'
+                       '            if (i < s.size() && s[i] == \'.\') i++;\n'
+                       '            else break;\n'
+                       '        }\n'
+                       '        if (nums.empty()) return false;\n'
+                       '        suffix = s.substr(i);\n'
+                       '        for (char& c : suffix) c = char(std::tolower(uint8_t(c)));\n'
+                       '        return true;\n'
+                       '    };\n'
+                       '    std::vector<uint32_t> xa, xb;\n'
+                       '    std::string sa, sb;\n'
+                       '    if (!parse(a, xa, sa) || !parse(b, xb, sb)) return a == b ? 0 : (a < b ? -1 : 1);\n'
+                       '    size_t n = (std::max)(xa.size(), xb.size());\n'
+                       '    xa.resize(n, 0); xb.resize(n, 0);\n'
+                       '    for (size_t i = 0; i < n; i++) if (xa[i] != xb[i]) return xa[i] > xb[i] ? 1 : -1;\n'
+                       '    if (sa == sb) return 0;\n'
+                       '    if (sa.empty()) return 1;\n'
+                       '    if (sb.empty()) return -1;\n'
+                       '    return sa > sb ? 1 : -1;\n'
+                       '}\n\n'
+                       'UpdateState LookUpLatest(const std::string& own, PortRelease& out) {\n'
+                       '    std::error_code ec;\n'
+                       '    fs::path dir = ExeDir() / "update";\n'
+                       '    fs::create_directories(dir, ec);\n'
+                       '    fs::path list = dir / "releases.json";\n'
+                       '    const char* api = std::getenv("NOBLE_UPDATE_API");\n'
+                       '    HttpAnswer a = HttpRequest(api && *api ? std::string(api) : std::string(kUpdateApi), &list, true);\n'
+                       '    std::string text;\n'
+                       '    {\n'
+                       '        std::ifstream f(list, std::ios::binary);\n'
+                       '        text.assign(std::istreambuf_iterator<char>(f), {});\n'
+                       '    }\n'
+                       '    fs::remove(list, ec);\n'
+                       '    if (GitHubBusy(a.status)) return UpdateState::Busy;\n'
+                       '    if (a.status != 200 || !NewestRelease(text, out)) return UpdateState::Unreachable;\n'
+                       '    return CompareReleaseVersions(out.tag, own) > 0 ? UpdateState::Available : UpdateState::UpToDate;\n'
+                       '}')
+    launcher = replace(launcher,
+                       '    static const char* const kKeep[] = {"assets", "textures", "hdd", "logs", "streamline", "licences",\n'
+                       '                                        "castlevania.toml", "update", "backup"};',
+                       '    static const char* const kKeep[] = {"assets", "textures", "hdd", "logs", "streamline", "licences",\n'
+                       '                                        "movies", "mods", "saves", "castlevania.toml", "update", "backup",\n'
+                       '                                        "apprun", ".diricon", "noble-archimedes.desktop", "noble-archimedes.png"};')
+    launcher = replace(launcher,
+                       '        if (!e.is_regular_file(ec)) continue;',
+                       '        if (e.is_symlink(ec) || !e.is_regular_file(ec)) continue;')
+    launcher = replace(launcher,
+                       '    std::ofstream v(game / kVersionFile);\n'
+                       '    v << tag << "\\n";\n'
+                       '    return 0;',
+                       '#ifndef _WIN32\n'
+                       '    for (const char* exe : {"NobleArchimedes", "NobleArchimedesEU", "NobleArchimedesLauncher",\n'
+                       '                            "compiler/xbe_recomp", "compiler/clang", "compiler/ld.lld"}) {\n'
+                       '        fs::path p = game / exe;\n'
+                       '        if (fs::exists(p, ec))\n'
+                       '            fs::permissions(p, fs::perms::owner_exec | fs::perms::group_exec | fs::perms::others_exec,\n'
+                       '                            fs::perm_options::add, ec);\n'
+                       '    }\n'
+                       '#endif\n'
+                       '    std::ofstream v(game / kVersionFile);\n'
+                       '    v << tag << "\\n";\n'
+                       '    return 0;')
+    launcher = replace(launcher,
+                       '            tool == 0 ? std::vector<std::string>{"curl", "-s", "--connect-timeout", "30", "--max-time", "300", "-D",\n'
+                       '                                                 hdr.string(), "-o", body}\n'
+                       '                      : std::vector<std::string>{"wget", "-S", "-t", "1", "-T", "30", "-o", hdr.string(), "-O", body,\n'
+                       '                                                 follow ? "--max-redirect=20" : "--max-redirect=0"};',
+                       '            tool == 0 ? std::vector<std::string>{"curl", "-s", "-A", "NobleArchimedesLauncher", "-H",\n'
+                       '                                                 "Accept: application/vnd.github+json", "--connect-timeout", "30",\n'
+                       '                                                 "--max-time", "300", "-D", hdr.string(), "-o", body}\n'
+                       '                      : std::vector<std::string>{"wget", "-S", "-U", "NobleArchimedesLauncher",\n'
+                       '                                                 "--header=Accept: application/vnd.github+json", "-t", "1", "-T", "30",\n'
+                       '                                                 "-o", hdr.string(), "-O", body,\n'
+                       '                                                 follow ? "--max-redirect=20" : "--max-redirect=0"};')
+    launcher = replace(launcher,
+                       '                code = RunTool({"tar", "-xJf", archive.string(), "-C", unpacked.string()});\n'
+                       '                ok = code == 0;',
+                       '                std::string ext = archive.extension().string();\n'
+                       '                for (char& c : ext) c = char(std::tolower(uint8_t(c)));\n'
+                       '                if (ext == ".appimage") {\n'
+                       '                    fs::permissions(archive, fs::perms::owner_exec | fs::perms::group_exec | fs::perms::others_exec,\n'
+                       '                                    fs::perm_options::add, ec);\n'
+                       '                    code = RunTool({"sh", "-c", "cd \\"$1\\" && \\"$2\\" --appimage-extract >/dev/null 2>&1", "--",\n'
+                       '                                    unpacked.string(), fs::absolute(archive, ec).string()});\n'
+                       '                } else {\n'
+                       '                    code = RunTool({"tar", "-xJf", archive.string(), "-C", unpacked.string()});\n'
+                       '                }\n'
+                       '                ok = code == 0;')
     # The preview uses the Noble art, independently of any texture pack.
     a = launcher.index('    void LoadArt() {')
     b = launcher.index('\n    }', a) + len('\n    }')

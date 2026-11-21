@@ -4720,9 +4720,25 @@ void D3D12Backend::UploadVertexBuffers(const Assembled& a) {
     D3D12_VERTEX_BUFFER_VIEW vbv[16];
     for (uint32_t i = 0; i < a.buffer_count; i++) {
         const VertexBuffer& b = a.buffers[i];
-        Alloc vb = Upload(b.bytes, 16);
+        uint32_t n = b.stride ? b.bytes / b.stride : 0;
+        if (b.tail && n) {
+            // an element past the stride (VertexBuffer::tail): each vertex in a wider record, with the bytes after it
+            // as the guest read them (the next vertex's), zeros after the last
+            uint32_t wide = b.stride + b.tail;
+            Alloc vb = Upload(size_t(n) * wide, 16);
+            for (uint32_t v = 0; v < n; v++) {
+                uint8_t* dst = vb.cpu + size_t(v) * wide;
+                size_t at = size_t(v) * b.stride, have = std::min<size_t>(wide, b.bytes - at);
+                std::memcpy(dst, b.src + at, have);
+                if (have < wide) std::memset(dst + have, 0, wide - have);
+            }
+            vbv[i] = {vb.gpu, n * wide, wide};
+            continue;
+        }
+        Alloc vb = Upload(b.bytes + b.tail, 16);
         std::memcpy(vb.cpu, b.src, b.bytes);
-        vbv[i] = {vb.gpu, b.bytes, b.stride};
+        if (b.tail) std::memset(vb.cpu + b.bytes, 0, b.tail);
+        vbv[i] = {vb.gpu, b.bytes + b.tail, b.stride};
     }
     cl_->IASetVertexBuffers(0, a.buffer_count, vbv);
 }

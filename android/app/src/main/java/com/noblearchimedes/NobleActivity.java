@@ -158,6 +158,7 @@ public class NobleActivity extends SDLActivity {
 
         bootStart = SystemClock.uptimeMillis();
         bootHandler.postDelayed(bootWatch, kBootWatchFirstMs);
+        UpdateChecker.startIfNeeded(this);
     }
 
     @Override
@@ -165,6 +166,7 @@ public class NobleActivity extends SDLActivity {
         super.onResume();
         enterImmersiveMode();
         updateControllerPresence();
+        UpdateChecker.attach(this, false);
     }
 
     @Override
@@ -253,6 +255,7 @@ public class NobleActivity extends SDLActivity {
 
     @Override
     protected void onPause() {
+        UpdateChecker.detach(this);
         if (touchControls != null) touchControls.releaseAll();
         super.onPause();
     }

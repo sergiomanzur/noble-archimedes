@@ -13,4 +13,4 @@ foreach(exe ${CV_RELEASES} NobleArchimedesLauncher)
             "$<TARGET_FILE_DIR:${exe}>/branding"
         VERBATIM)
 endforeach()
-target_link_libraries(NobleArchimedesLauncher PRIVATE winmm)
+target_link_libraries(NobleArchimedesLauncher PRIVATE winmm wininet urlmon)

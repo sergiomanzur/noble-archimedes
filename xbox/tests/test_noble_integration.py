@@ -21,7 +21,7 @@ class NobleIntegration(unittest.TestCase):
                 self.assertIn('noble-branding.cmake', data)
                 self.assertIn('Castlevania is a trademark of Konami.', data)
                 self.assertNotIn('NobleArchimedes is a trademark', data)
-                self.assertIn('0.9.0b', data)
+                self.assertIn(backend.RELEASE_VERSION, data)
             elif source.endswith('.toml'):
                 self.assertIn('library = "NobleArchimedes' + ('EU' if '_eu' in source else '') + '.dll"', data)
             else:

@@ -1,22 +1,31 @@
 # Noble Archimedes for Android
 
 The Android host for Noble Archimedes: the same statically recompiled Xbox game,
-the advanced Vulkan/D3D12 renderer, widescreen, HD texture packs, saves, sound
-and the in-game settings menu. It runs natively on ARM64 Android and adds a
-branded splash, the Noble Archimedes launcher icon, a touch pad, and full SDL3
-controller support.
+a direct native Vulkan 1.1 renderer with **ARM Mali and Qualcomm Adreno GPU
+support**, widescreen, HD texture packs, saves, sound and the in-game settings
+menu. It runs natively on ARM64 Android and adds a branded splash, the Noble
+Archimedes launcher icon, a touch pad, and full SDL3 controller support.
 
 This is a **bring-your-own-game** build. No game data is included in the APK or
 in this repository.
 
 ## What is in the APK
 
-- The Xbox recompilation runtime and the advanced renderer, built for
-  `arm64-v8a` against Android API 26.
-- vkd3d 2.1 (Direct3D 12 on Vulkan), with the mobile/virtual-descriptor-heap
-  path selected for Adreno and other mobile drivers.
+- The Xbox recompilation runtime and a direct native **Vulkan 1.1** GPU backend
+  with static **glslang 16.0.0** HLSL-to-SPIR-V compilation, built for
+  `arm64-v8a` against Android API 26 with 16 KB ELF page alignment (no `vkd3d`
+  translation layer).
+- Broad mobile GPU compatibility (**ARM Mali** and **Qualcomm Adreno**):
+  automatic `VkRenderPass`/`VkFence` fallbacks when Vulkan 1.3 dynamic
+  rendering or timeline semaphores are unavailable, CPU DXT1/DXT3/DXT5 texture
+  decoding when BC compression is absent, Mali-safe SPIR-V rewriting, pooled
+  32 MB device memory allocation, bounded 256 MB LRU texture cache, persistent
+  `.spv` / `pipelines.bin` shader cache, and a 4 GB RAM-friendly default render
+  scale (`render_percent = 67`).
 - SDL3 3.4.16 for the native window, Android audio (AAudio), touch and
-  controllers.
+  controllers, plus Dear ImGui rendered directly via `ImGui_ImplVulkan`.
+- Android 11+ `ApplicationExitInfo` crash/LMK logger (`logs/crash_*.txt`) and
+  automatic GitHub APK update checker.
 - A branded Android 12+ system splash and an in-app splash, using the original
   Noble Archimedes astrolabe artwork.
 - A complete touch pad: two sticks, d-pad, A/B/X/Y, LB/RB, LT/RT, Back, Start,
@@ -65,13 +74,13 @@ stops and asks you to run the preparation command above. The Android build
 reuses its ImGui, toml++, xxhash and SDL3 source checkouts so no second copy of
 those dependencies is downloaded.
 
-### vkd3d prebuilt libraries
+### Shader compiler (`glslang`) and headers
 
-`android/third_party/vkd3d` contains the arm64 `libvkd3d*.so` libraries and
-headers used by the APK. They are LGPL-2.1-or-later; the exact source, license
-and the one mobile patch are documented in
-[`third_party/vkd3d/README.md`](third_party/vkd3d/README.md). Rebuild them with
-`tools/build_vkd3d_android.sh` if needed.
+`tools/build_android.py` automatically clones `KhronosGroup/glslang` (`16.0.0`)
+into `output/android-work/glslang-src` if not already present (override with
+`--glslang`) and builds it statically into `libmain.so`. `android/third_party/vkd3d`
+is only used for its DXGI/D3D12 format headers at compile time; no `libvkd3d*.so`
+libraries are linked or packaged in the APK.
 
 ## Install the game data
 

@@ -1,5 +1,17 @@
 # Changelog
 
+## v1.1.0 — Android Mali GPU support and native Vulkan 1.1 backend (2026-11-23)
+
+- **ARM Mali GPU support on Android:** replace `vkd3d 2.1` on Android with a direct native **Vulkan 1.1** `gpu::Backend` (`android/app/src/main/cpp/vulkan.cpp`) and in-process static **`glslang 16.0.0`** HLSL-to-SPIR-V compiler (`vk_shader.{h,cpp}`). Resolves immediate startup crashes on ARM Mali devices (such as Mali-G57 / Dimensity 700 / 4 GB phones) while keeping full support for Adreno and desktop-class mobile Vulkan drivers.
+- **Mali driver & Vulkan 1.1 compatibility:**
+  - Automatically falls back to `VkRenderPass` + `VkFramebuffer` when `VK_KHR_dynamic_rendering` (or `vkCmdBeginRenderingKHR`) is absent and to `VkFence` when timeline semaphores are unavailable.
+  - Decodes Xbox DXT1/DXT3/DXT5 textures to BGRA8 on the CPU when hardware BC texture compression is unsupported (`textureCompressionBC == VK_FALSE`).
+  - Rewrites generated HLSL for Mali SPIR-V rules (always entry point `"main"`, single 12-binding descriptor layout, `SV_ClipDistance0` stripping when unsupported, `[[vk::builtin("PointSize")]]`, and generalized opaque `Texture*`/`Sampler*` specialization for `spreadtap`/`shadow`/`parallax`/`material`), ignores `VK_SUBOPTIMAL_KHR`, skips unsupported `VK_EXT_extended_dynamic_state`, checks per-format linear filtering, and skips rejected pipelines instead of aborting.
+  - Preserves full Castlevania `gpu::Extension` features (widescreen, HUD edge pinning, menu spread, overscan fix, reversed-Z depth, HD texture packs + material maps) and switches the Android settings overlay to native `ImGui_ImplVulkan`.
+- **4 GB RAM & cold-boot improvements on Android:** pooled 32 MB Vulkan memory allocator, bounded 256 MB / 1024-entry LRU texture cache eviction, persistent `shadercache/*.spv` + `shadercache/pipelines.bin` caching, `render_percent = 67` first-run mobile default, `-fsigned-char`, 16 KB ELF alignment with only `libSDL3.so` + `libmain.so` packaged (no `libvkd3d*.so`), and removal of the obsolete `present.cpp` 60 s black-boot kill-watchdog that could falsely terminate slow first-run shader compiles on Android 14+.
+- **Crash & LMK diagnostics:** add `CrashLogs.java` to persist Android 11+ `ApplicationExitInfo` native tombstones, Java crashes, ANRs, and low-memory (LMK) kills into `files/logs/crash_*.txt` on next launch.
+- Windows x64 and Linux x86_64 builds are unchanged from v1.0.0; only the Android arm64 APK and companion Source archive are published for v1.1.0.
+
 ## v1.0.0 — AMD GCN rendering fix and GitHub auto-updater (2026-11-21)
 
 - **AMD GCN rendering fix:** port the vertex-buffer re-striding fix from `jmafort/CastlevaniaCOD-PC` (`ccd5000`, issue #16) to all Noble Archimedes build paths (Windows D3D12, Linux vkd3d, Android vkd3d, and the standard Xbox build path). When a vertex declaration places an element past the stream's vertex stride (such as Castlevania's 2D draws declaring an unused second texture coordinate at byte 28 of 28-byte vertices), `AssembleRaw` records the overhang in `VertexBuffer::tail` and `D3D12Backend::UploadVertexBuffers` uploads the buffer at the widened stride (`stride + tail`), keeping every input element within its vertex record and fixing stretched/melted 2D quads and full-frame passes on AMD GCN cards (RX 400/500, Vega).

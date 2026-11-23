@@ -32,6 +32,8 @@ DEFAULT_SDK = NEXT / "sdk"
 DEFAULT_PORT = NEXT / "port"
 DEFAULT_GENERATED = DEFAULT_PORT / "generated" / "game"
 DEFAULT_VKD3D = ANDROID / "third_party" / "vkd3d"
+DEFAULT_GLSLANG = ROOT / "output" / "android-work" / "glslang-src"
+GLSLANG_TAG = "16.0.0"
 OVERLAY = ANDROID / "overlay"
 
 
@@ -166,6 +168,7 @@ def main() -> None:
     parser.add_argument("--port", type=Path, default=DEFAULT_PORT)
     parser.add_argument("--generated", type=Path, default=DEFAULT_GENERATED)
     parser.add_argument("--vkd3d", type=Path, default=DEFAULT_VKD3D)
+    parser.add_argument("--glslang", type=Path, default=DEFAULT_GLSLANG)
     parser.add_argument("--imgui", type=Path, default=NEXT / "build-windows" / "_deps" / "imgui-src")
     parser.add_argument("--toml", type=Path, default=NEXT / "build-windows" / "_deps" / "tomlplusplus-src")
     parser.add_argument("--xxhash", type=Path, default=NEXT / "build-windows" / "_deps" / "xxhash-src")
@@ -199,8 +202,14 @@ def main() -> None:
     write_xbe_support(args.assets.resolve(), generated)
 
     vkd3d = args.vkd3d.resolve()
-    if not (vkd3d / "lib" / "libvkd3d.so").is_file():
-        fail(f"vkd3d prebuilts missing at {vkd3d}; see android/third_party/vkd3d/README.md")
+    if not (vkd3d / "include" / "vkd3d").is_dir():
+        fail(f"vkd3d headers missing at {vkd3d}")
+
+    glslang = args.glslang.resolve()
+    if not (glslang / "CMakeLists.txt").is_file():
+        glslang.parent.mkdir(parents=True, exist_ok=True)
+        run(["git", "clone", "--depth", "1", "--branch", GLSLANG_TAG,
+             "https://github.com/KhronosGroup/glslang.git", glslang])
 
     sdk_root = find_sdk()
     java = find_java()
@@ -216,6 +225,7 @@ def main() -> None:
         "nobleSdk": sdk,
         "noblePort": port,
         "nobleVkd3d": vkd3d,
+        "nobleGlslang": glslang,
         "nobleGenerated": generated,
         "nobleImgui": args.imgui.resolve(),
         "nobleToml": args.toml.resolve(),

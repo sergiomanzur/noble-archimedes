@@ -3,9 +3,6 @@ package com.noblearchimedes;
 import android.hardware.input.InputManager;
 import android.os.Build;
 import android.os.Bundle;
-import android.os.Handler;
-import android.os.Looper;
-import android.os.SystemClock;
 import android.view.KeyEvent;
 import android.view.View;
 import android.view.Window;
@@ -29,101 +26,6 @@ public class NobleActivity extends SDLActivity {
     private boolean controllerHintShown;
     private int faceButtons;
 
-    // Safety net: if the game surface still shows no picture a minute after launch, restart the app (twice at most).
-    // The cause of black screens on Adreno (a driver bug, see present.cpp) is worked around, so this should never fire;
-    // once a picture has been seen the watch ends for good, so play is never restarted.
-    private final Handler bootHandler = new Handler(Looper.getMainLooper());
-    private static final int kBlackBootRetries = 2;
-    private static final long kBootWatchFirstMs = 10000;   // first look: the splash is still up
-    private static final long kBootWatchStepMs = 3000;
-    private static final long kBootNoPictureMs = 60000;    // a normal boot shows a picture within ~10 s
-    private static final long kBootWatchEndMs = 120000;
-    private static final int kVisibleMean = 4;            // 0..255 mean over the sampled surface
-    private long bootStart;
-    private int visibleSamples;
-    private boolean bootWatchDone;
-
-    private final Runnable bootWatch = new Runnable() {
-        @Override public void run() {
-            sampleBootScreen();
-        }
-    };
-
-    private void sampleBootScreen() {
-        if (bootWatchDone) return;
-        long elapsed = SystemClock.uptimeMillis() - bootStart;
-        if (elapsed > kBootWatchEndMs) {
-            bootWatchDone = true;
-            return;
-        }
-        if (mSurface == null || !mSurface.isAttachedToWindow() || !mSurface.getHolder().getSurface().isValid()) {
-            bootHandler.postDelayed(bootWatch, kBootWatchStepMs);
-            return;
-        }
-        final android.graphics.Bitmap bmp = android.graphics.Bitmap.createBitmap(
-                64, 36, android.graphics.Bitmap.Config.ARGB_8888);
-        try {
-            android.view.PixelCopy.request(mSurface, bmp, result -> {
-                if (bootWatchDone) return;
-                if (result == android.view.PixelCopy.SUCCESS) {
-                    int[] px = new int[bmp.getWidth() * bmp.getHeight()];
-                    bmp.getPixels(px, 0, bmp.getWidth(), 0, 0, bmp.getWidth(), bmp.getHeight());
-                    long sum = 0;
-                    for (int c : px) sum += ((c >> 16) & 255) + ((c >> 8) & 255) + (c & 255);
-                    int mean = (int) (sum / (px.length * 3L));
-                    android.util.Log.i("NobleBoot", "boot screen mean " + mean);
-                    if (mean >= kVisibleMean && ++visibleSamples >= 2) {
-                        bootWatchDone = true;
-                        resetBlackBootCount();
-                        return;
-                    }
-                    long now = SystemClock.uptimeMillis() - bootStart;
-                    if (visibleSamples == 0 && now >= kBootNoPictureMs) {
-                        restartForBlackBoot();
-                        return;
-                    }
-                }
-                bootHandler.postDelayed(bootWatch, kBootWatchStepMs);
-            }, bootHandler);
-        } catch (Throwable t) {
-            android.util.Log.w("NobleBoot", "PixelCopy failed", t);
-            bootWatchDone = true;
-        }
-    }
-
-    private void restartForBlackBoot() {
-        android.content.SharedPreferences prefs =
-                getSharedPreferences("noble_android", MODE_PRIVATE);
-        int attempts = prefs.getInt("black_boot_attempts", 0);
-        bootWatchDone = true;
-        if (attempts >= kBlackBootRetries) {
-            android.util.Log.w("NobleBoot",
-                    "no picture after " + attempts + " restarts; leaving it");
-            return;
-        }
-        prefs.edit().putInt("black_boot_attempts", attempts + 1).commit();
-        android.util.Log.i("NobleBoot", "no picture after boot; restarting (" + (attempts + 1) + ")");
-        android.content.Intent intent = new android.content.Intent(this, SetupActivity.class);
-        intent.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK
-                | android.content.Intent.FLAG_ACTIVITY_CLEAR_TASK);
-        android.app.PendingIntent pi = android.app.PendingIntent.getActivity(this, 42, intent,
-                android.app.PendingIntent.FLAG_IMMUTABLE
-                        | android.app.PendingIntent.FLAG_UPDATE_CURRENT);
-        android.app.AlarmManager am =
-                (android.app.AlarmManager) getSystemService(ALARM_SERVICE);
-        if (am != null) {
-            am.set(android.app.AlarmManager.ELAPSED_REALTIME,
-                    SystemClock.elapsedRealtime() + 800, pi);
-        }
-        finishAffinity();
-        android.os.Process.killProcess(android.os.Process.myPid());
-    }
-
-    private void resetBlackBootCount() {
-        getSharedPreferences("noble_android", MODE_PRIVATE).edit()
-                .putInt("black_boot_attempts", 0).apply();
-    }
-
     private final InputManager.InputDeviceListener inputDeviceListener = new InputManager.InputDeviceListener() {
         @Override public void onInputDeviceAdded(int deviceId) { updateControllerPresence(); }
         @Override public void onInputDeviceRemoved(int deviceId) { updateControllerPresence(); }
@@ -133,6 +35,7 @@ public class NobleActivity extends SDLActivity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        CrashLogs.save(this);
 
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         enterImmersiveMode();
@@ -156,8 +59,6 @@ public class NobleActivity extends SDLActivity {
         inputManager = (InputManager) getSystemService(INPUT_SERVICE);
         if (inputManager != null) inputManager.registerInputDeviceListener(inputDeviceListener, null);
 
-        bootStart = SystemClock.uptimeMillis();
-        bootHandler.postDelayed(bootWatch, kBootWatchFirstMs);
         UpdateChecker.startIfNeeded(this);
     }
 
@@ -263,7 +164,6 @@ public class NobleActivity extends SDLActivity {
     @Override
     protected void onDestroy() {
         if (inputManager != null) inputManager.unregisterInputDeviceListener(inputDeviceListener);
-        bootHandler.removeCallbacksAndMessages(null);
         if (splash != null) splash.stop();
         super.onDestroy();
     }

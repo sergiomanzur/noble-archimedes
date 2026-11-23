@@ -2,11 +2,13 @@ cmake_minimum_required(VERSION 3.22)
 
 project(NobleArchimedesAndroid LANGUAGES C CXX)
 
+add_link_options("-Wl,-z,max-page-size=16384")
+
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS ON)
 
-foreach(required NOBLE_SDK NOBLE_PORT NOBLE_VKD3D NOBLE_GENERATED NOBLE_IMGUI NOBLE_TOML NOBLE_XXHASH NOBLE_SDL NOBLE_STB)
+foreach(required NOBLE_SDK NOBLE_PORT NOBLE_VKD3D NOBLE_GLSLANG NOBLE_GENERATED NOBLE_IMGUI NOBLE_TOML NOBLE_XXHASH NOBLE_SDL NOBLE_STB)
     if(NOT ${required})
         message(FATAL_ERROR "${required} is not set. Run tools/build_android.py or pass -D${required}=...")
     endif()
@@ -29,46 +31,48 @@ set(SDL_CAMERA OFF CACHE BOOL "" FORCE)
 add_subdirectory(${NOBLE_SDL} ${CMAKE_BINARY_DIR}/sdl3)
 
 # ---------------------------------------------------------------------------
-# Dear ImGui (DX12 renderer; the SDL platform side is runtime/linux/imgui_sdl.cpp)
+# glslang (static; compiles Xbox HLSL directly to Vulkan 1.1 / SPIR-V 1.3)
+# ---------------------------------------------------------------------------
+set(ENABLE_OPT OFF CACHE BOOL "" FORCE)
+set(ENABLE_HLSL ON CACHE BOOL "" FORCE)
+set(ENABLE_GLSLANG_BINARIES OFF CACHE BOOL "" FORCE)
+set(ENABLE_SPVREMAPPER OFF CACHE BOOL "" FORCE)
+set(GLSLANG_TESTS OFF CACHE BOOL "" FORCE)
+set(GLSLANG_ENABLE_INSTALL OFF CACHE BOOL "" FORCE)
+set(BUILD_EXTERNAL OFF CACHE BOOL "" FORCE)
+add_subdirectory(${NOBLE_GLSLANG} ${CMAKE_BINARY_DIR}/glslang EXCLUDE_FROM_ALL)
+
+# ---------------------------------------------------------------------------
+# Dear ImGui (Vulkan renderer; the SDL platform side is runtime/linux/imgui_sdl.cpp)
 # ---------------------------------------------------------------------------
 add_library(noble_imgui STATIC
     ${NOBLE_IMGUI}/imgui.cpp
     ${NOBLE_IMGUI}/imgui_draw.cpp
     ${NOBLE_IMGUI}/imgui_tables.cpp
     ${NOBLE_IMGUI}/imgui_widgets.cpp
-    ${NOBLE_IMGUI}/backends/imgui_impl_dx12.cpp)
+    ${NOBLE_IMGUI}/backends/imgui_impl_vulkan.cpp)
 target_include_directories(noble_imgui PUBLIC
     ${NOBLE_IMGUI}
     ${NOBLE_IMGUI}/backends)
-target_include_directories(noble_imgui SYSTEM PRIVATE
-    ${NOBLE_SDK}/runtime/linux
-    ${NOBLE_VKD3D}/include/vkd3d)
 target_compile_definitions(noble_imgui PRIVATE NOMINMAX)
 target_compile_options(noble_imgui PRIVATE -w)
+target_link_libraries(noble_imgui PRIVATE vulkan)
 
 # ---------------------------------------------------------------------------
-# vkd3d: D3D12 on Vulkan, the same version the Linux preview carries
-# ---------------------------------------------------------------------------
-add_library(noble_vkd3d SHARED IMPORTED)
-set_target_properties(noble_vkd3d PROPERTIES
-    IMPORTED_LOCATION ${NOBLE_VKD3D}/lib/libvkd3d.so
-    INTERFACE_INCLUDE_DIRECTORIES ${NOBLE_VKD3D}/include/vkd3d)
-add_library(noble_vkd3d_shader SHARED IMPORTED)
-set_target_properties(noble_vkd3d_shader PROPERTIES
-    IMPORTED_LOCATION ${NOBLE_VKD3D}/lib/libvkd3d-shader.so)
-add_library(noble_vkd3d_utils SHARED IMPORTED)
-set_target_properties(noble_vkd3d_utils PROPERTIES
-    IMPORTED_LOCATION ${NOBLE_VKD3D}/lib/libvkd3d-utils.so)
-
-# ---------------------------------------------------------------------------
-# Noble Archimedes runtime + game code
+# Noble Archimedes runtime + game code + native Vulkan 1.1 Android renderer
 # ---------------------------------------------------------------------------
 file(GLOB NOBLE_RUNTIME_SOURCES CONFIGURE_DEPENDS
     ${NOBLE_SDK}/runtime/*/*.cpp)
 list(REMOVE_ITEM NOBLE_RUNTIME_SOURCES
+    ${NOBLE_SDK}/runtime/gpu/d3d12.cpp
+    ${NOBLE_SDK}/runtime/gpu/raytrace.cpp
+    ${NOBLE_SDK}/runtime/gpu/framegen.cpp
     ${NOBLE_SDK}/runtime/linux/main.cpp
     ${NOBLE_SDK}/runtime/linux/game_code.cpp
-    ${NOBLE_SDK}/runtime/linux/dlss_vk.cpp)
+    ${NOBLE_SDK}/runtime/linux/present.cpp
+    ${NOBLE_SDK}/runtime/linux/dlss_vk.cpp
+    ${NOBLE_SDK}/runtime/linux/fsr_vk.cpp
+    ${NOBLE_SDK}/runtime/linux/vk_images.cpp)
 
 file(GLOB NOBLE_PORT_SOURCES CONFIGURE_DEPENDS
     ${NOBLE_PORT}/src/common/*.cpp
@@ -86,6 +90,8 @@ list(APPEND NOBLE_GAME_CODE
 
 file(GLOB NOBLE_ANDROID_SOURCES CONFIGURE_DEPENDS
     ${CMAKE_CURRENT_SOURCE_DIR}/*.cpp)
+list(REMOVE_ITEM NOBLE_ANDROID_SOURCES
+    ${CMAKE_CURRENT_SOURCE_DIR}/android_dlss_stub.cpp)
 
 add_library(main SHARED
     ${NOBLE_RUNTIME_SOURCES}
@@ -93,9 +99,13 @@ add_library(main SHARED
     ${NOBLE_GAME_CODE}
     ${NOBLE_ANDROID_SOURCES})
 
+# x86 char is signed; ARM64 defaults to unsigned char unless -fsigned-char is passed.
 set_source_files_properties(${NOBLE_GAME_CODE} PROPERTIES
-    COMPILE_OPTIONS "-O2;-fno-strict-aliasing;-w"
+    COMPILE_OPTIONS "-O2;-fno-strict-aliasing;-fsigned-char;-w"
     SKIP_PRECOMPILE_HEADERS ON)
+
+set_source_files_properties(${CMAKE_CURRENT_SOURCE_DIR}/vk_shader.cpp PROPERTIES
+    COMPILE_DEFINITIONS ENABLE_HLSL)
 
 target_include_directories(main PRIVATE
     ${NOBLE_SDK}/runtime
@@ -103,6 +113,7 @@ target_include_directories(main PRIVATE
     ${NOBLE_PORT}/src
     ${NOBLE_GENERATED}
     ${NOBLE_VKD3D}/include/vkd3d
+    ${NOBLE_GLSLANG}
     ${NOBLE_IMGUI}
     ${NOBLE_IMGUI}/backends
     ${NOBLE_TOML}/include
@@ -118,15 +129,16 @@ target_compile_definitions(main PRIVATE
 
 target_compile_options(main PRIVATE
     -fno-strict-aliasing
+    -fsigned-char
     -fvisibility=default)
 
 target_link_libraries(main PRIVATE
     SDL3::SDL3
     noble_imgui
-    noble_vkd3d
-    noble_vkd3d_shader
-    noble_vkd3d_utils
+    glslang
+    glslang-default-resource-limits
     vulkan
+    android
     log
     dl
     m)
@@ -134,11 +146,3 @@ target_link_libraries(main PRIVATE
 set_target_properties(main PROPERTIES
     OUTPUT_NAME main
     LIBRARY_OUTPUT_DIRECTORY ${CMAKE_LIBRARY_OUTPUT_DIRECTORY})
-
-add_custom_command(TARGET main POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        ${NOBLE_VKD3D}/lib/libvkd3d.so
-        ${NOBLE_VKD3D}/lib/libvkd3d-shader.so
-        ${NOBLE_VKD3D}/lib/libvkd3d-utils.so
-        ${CMAKE_LIBRARY_OUTPUT_DIRECTORY}/
-    VERBATIM)

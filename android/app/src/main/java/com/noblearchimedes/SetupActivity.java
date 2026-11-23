@@ -72,6 +72,7 @@ public class SetupActivity extends Activity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        CrashLogs.save(this);
         UpdateChecker.startIfNeeded(this);
         if (hasGame(assetsDir()) && !getIntent().getBooleanExtra("change", false)) {
             startGame();

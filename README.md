@@ -1,13 +1,13 @@
 # Noble Archimedes
 
-**Latest release: [v1.0.0](https://github.com/sergiomanzur/noble-archimedes/releases/tag/v1.0.0).** Ports the AMD GCN vertex-stride rendering fix (resolving stretched/melted 2D quads and full-frame passes on Radeon RX 400/500 and Vega cards) and adds automatic GitHub update checks across Windows, Linux and Android. Native Windows x64, Linux x86_64 and Android arm64 builds of the advanced renderer are available. The game compiles locally on first run from your own Xbox files. See the [changelog](CHANGELOG.md), [modern PC controls](docs/MODERN_PC_CONTROLS.md) and [Android guide](android/README.md).
+**Latest release: [v1.1.0](https://github.com/sergiomanzur/noble-archimedes/releases/tag/v1.1.0).** Adds **ARM Mali GPU support** on Android by replacing `vkd3d` with a direct native Vulkan 1.1 backend and in-process `glslang` shader compiler, alongside 4 GB RAM optimizations and crash diagnostics. Native Windows x64, Linux x86_64 (`v1.0.0`, unchanged) and Android arm64 (`v1.1.0`) builds of the advanced renderer are available. The game compiles locally on first run from your own Xbox files. See the [changelog](CHANGELOG.md), [modern PC controls](docs/MODERN_PC_CONTROLS.md) and [Android guide](android/README.md).
 
 | Platform | Download | Notes |
 | --- | --- | --- |
-| Windows x64 | [Noble-Archimedes-1.0.0-Windows-x64.zip](https://github.com/sergiomanzur/noble-archimedes/releases/download/v1.0.0/Noble-Archimedes-1.0.0-Windows-x64.zip) | Tested USA host; Direct3D 12; AMD GCN fix & auto-updater. |
-| Linux x86_64 | [Noble-Archimedes-1.0.0-Linux-x86_64.AppImage](https://github.com/sergiomanzur/noble-archimedes/releases/download/v1.0.0/Noble-Archimedes-1.0.0-Linux-x86_64.AppImage) | USA release; Vulkan through vkd3d; glibc 2.35+; AMD/Vulkan fix & AppImage auto-updater. |
-| Android arm64 | [Noble-Archimedes-1.0.0-Android-arm64.apk](https://github.com/sergiomanzur/noble-archimedes/releases/download/v1.0.0/Noble-Archimedes-1.0.0-Android-arm64.apk) | Android 8.0 (API 26) or later. First-run file picker, Adreno black-title fix, automatic GitHub APK update downloader. Bring your own game data; see the [Android guide](android/README.md). |
-| Source | [Noble-Archimedes-1.0.0-Source.zip](https://github.com/sergiomanzur/noble-archimedes/releases/download/v1.0.0/Noble-Archimedes-1.0.0-Source.zip) | Project, patched SDK and dependency sources. |
+| Android arm64 | [Noble-Archimedes-1.1.0-Android-arm64.apk](https://github.com/sergiomanzur/noble-archimedes/releases/download/v1.1.0/Noble-Archimedes-1.1.0-Android-arm64.apk) | **New in v1.1.0:** Android 8.0 (API 26)+, **Mali & Adreno GPU support** via direct native Vulkan 1.1 (no `vkd3d`), CPU DXT fallback, 4 GB RAM optimizations, first-run file picker, and automatic GitHub APK updater. See the [Android guide](android/README.md). |
+| Windows x64 | [Noble-Archimedes-1.0.0-Windows-x64.zip](https://github.com/sergiomanzur/noble-archimedes/releases/download/v1.0.0/Noble-Archimedes-1.0.0-Windows-x64.zip) | Unchanged from v1.0.0. Tested USA host; Direct3D 12; AMD GCN fix & auto-updater. |
+| Linux x86_64 | [Noble-Archimedes-1.0.0-Linux-x86_64.AppImage](https://github.com/sergiomanzur/noble-archimedes/releases/download/v1.0.0/Noble-Archimedes-1.0.0-Linux-x86_64.AppImage) | Unchanged from v1.0.0. USA release; Vulkan through vkd3d; glibc 2.35+; AMD/Vulkan fix & AppImage auto-updater. |
+| Source | [Noble-Archimedes-1.1.0-Source.zip](https://github.com/sergiomanzur/noble-archimedes/releases/download/v1.1.0/Noble-Archimedes-1.1.0-Source.zip) | Project, patched SDK and dependency sources. |
 
 All downloads are bring-your-own-game builds: no disc image, game executable, game assets or generated game implementation is included. The Android port adds a branded splash and launcher icon, a complete touch pad with controller-aware auto-hide, automatic GitHub update downloads, and SDL3 support for USB, Bluetooth and built-in handheld controllers (Retroid Pocket 6, AYN Thor and similar). The Windows and Linux launchers check GitHub Releases on startup and can download, verify, install updates in place, and restart automatically.
 
@@ -28,7 +28,7 @@ Targets: Windows x64 with Direct3D 12, Linux x86_64 with Vulkan, and Android arm
 
 The build helper verifies the upstream snapshot, prepares an isolated working copy and fetches the pinned open-source SDK. Game code is generated locally from your XBE. The launcher and game are written to `output/jmafort-port/out/build/release/` as `NobleArchimedesLauncher.exe` and `NobleArchimedes.exe`. Primary CMake targets and generated game-DLL names use `NobleArchimedes*`; some internal window classes, logs and settings retain upstream compatibility names. See [BUILDING.md](BUILDING.md) for input validation, EU preparation, alternate asset paths and the experimental PS2 workflow.
 
-The Windows release uses the advanced renderer. A native Linux x86_64 AppImage is in the [latest release](https://github.com/sergiomanzur/noble-archimedes/releases/tag/v1.0.0); contributor build instructions remain in [BUILDING.md](BUILDING.md#native-linux-and-advanced-graphics-preview).
+The Windows release uses the advanced renderer. A native Linux x86_64 AppImage is in the [v1.0.0 release](https://github.com/sergiomanzur/noble-archimedes/releases/tag/v1.0.0); contributor build instructions remain in [BUILDING.md](BUILDING.md#native-linux-and-advanced-graphics-preview).
 
 ## Xbox features and validation
 

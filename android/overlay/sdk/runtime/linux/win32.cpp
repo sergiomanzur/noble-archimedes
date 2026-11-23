@@ -125,10 +125,12 @@ void Spawn(const char* program, const char* arg) {
 using namespace linuxapp;
 
 HMODULE GetModuleHandleA(const char* name) {
-    // D3D12SerializeRootSignature is vkd3d-utils' here
 #ifdef __ANDROID__
-    return name && !std::strcmp(name, "d3d12.dll") ? dlopen("libvkd3d-utils.so", RTLD_NOW) : nullptr;
+    // Android uses the direct native Vulkan 1.1 backend and ImGui Vulkan; no vkd3d DLL shims needed.
+    (void)name;
+    return nullptr;
 #else
+    // D3D12SerializeRootSignature is vkd3d-utils' here
     return name && !std::strcmp(name, "d3d12.dll") ? dlopen("libvkd3d-utils.so.1", RTLD_NOW) : nullptr;
 #endif
 }

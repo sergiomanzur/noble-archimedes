@@ -35,7 +35,7 @@ def tool(name):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--base", type=Path, default=ROOT / "artifacts" / "Noble-Archimedes-1.0.0-Android-arm64.apk")
+    ap.add_argument("--base", type=Path, default=ROOT / "artifacts" / "Noble-Archimedes-1.1.0-Android-arm64.apk")
     ap.add_argument("--out", type=Path, default=ROOT / "artifacts" / "Noble-Archimedes-Android-repack.apk")
     ap.add_argument("--install", action="store_true")
     args = ap.parse_args()
@@ -61,8 +61,8 @@ def main():
     run(aapt2, "compile", "-o", work / "compiled", *res)
     flats = [str(p) for p in (work / "compiled").glob("*.flat")]
     run(aapt2, "link", "-o", work / "base.apk", "-I", android_jar, "--manifest", work / "AndroidManifest.xml",
-        "--min-sdk-version", "26", "--target-sdk-version", "34", "--version-code", "1000",
-        "--version-name", "1.0.0", "--custom-package", "com.noblearchimedes", "--java", work / "gen", *flats)
+        "--min-sdk-version", "26", "--target-sdk-version", "34", "--version-code", "1100",
+        "--version-name", "1.1.0", "--custom-package", "com.noblearchimedes", "--java", work / "gen", *flats)
 
     sources = [str(p) for p in (MAIN / "java").rglob("*.java")] + [str(p) for p in (work / "gen").rglob("*.java")]
     run(java_home / "bin" / "javac", "-encoding", "UTF-8", "--release", "17", "-classpath", android_jar,

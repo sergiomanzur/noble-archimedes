@@ -8,6 +8,7 @@ plugins {
 def nobleSdk = project.findProperty('nobleSdk') ?: System.getenv('NOBLE_SDK')
 def noblePort = project.findProperty('noblePort') ?: System.getenv('NOBLE_PORT')
 def nobleVkd3d = project.findProperty('nobleVkd3d') ?: System.getenv('NOBLE_VKD3D')
+def nobleGlslang = project.findProperty('nobleGlslang') ?: System.getenv('NOBLE_GLSLANG')
 def nobleGenerated = project.findProperty('nobleGenerated') ?: System.getenv('NOBLE_GENERATED')
 def nobleImgui = project.findProperty('nobleImgui') ?: System.getenv('NOBLE_IMGUI')
 def nobleToml = project.findProperty('nobleToml') ?: System.getenv('NOBLE_TOML')
@@ -24,8 +25,8 @@ android {
         applicationId 'com.noblearchimedes.game'
         minSdk 26
         targetSdk 34
-        versionCode 1000
-        versionName '1.0.0'
+        versionCode 1100
+        versionName '1.1.0'
 
         ndk {
             abiFilters 'arm64-v8a'
@@ -38,6 +39,7 @@ android {
                           "-DNOBLE_SDK=${nobleSdk}",
                           "-DNOBLE_PORT=${noblePort}",
                           "-DNOBLE_VKD3D=${nobleVkd3d}",
+                          "-DNOBLE_GLSLANG=${nobleGlslang}",
                           "-DNOBLE_GENERATED=${nobleGenerated}",
                           "-DNOBLE_IMGUI=${nobleImgui}",
                           "-DNOBLE_TOML=${nobleToml}",

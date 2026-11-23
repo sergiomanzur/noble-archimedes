@@ -316,12 +316,9 @@ int main(int argc, char** argv) {
 
     // One log a session, under the app's external files directory.
     logx::Init((app::ExeDir() / "logs").string(), app::kGame.log, false);
-#ifdef __ANDROID__
-    // vkd3d's diagnostics go to stderr; keep them beside the game for bring-up.
-    setenv("VKD3D_DEBUG", "warn", 1);
-    static FILE* vkd3d_log = freopen((app::ExeDir() / "vkd3d.log").string().c_str(), "w", stderr);
-    (void)vkd3d_log;
-#endif
+    // Mobile first-run default (~720p on 1080p phones to keep RAM and GPU load comfortable on
+    // 4 GB devices); overwritten by the player's saved castlevania.toml once present.
+    app::Get().render_percent = 67;
     app::Load();
     if (app::kGame.init) app::kGame.init();
 

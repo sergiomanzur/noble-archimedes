@@ -28,8 +28,10 @@ in this repository.
   automatic GitHub APK update checker.
 - A branded Android 12+ system splash and an in-app splash, using the original
   Noble Archimedes astrolabe artwork.
-- A complete touch pad: two sticks, d-pad, A/B/X/Y, LB/RB, LT/RT, Back, Start,
-  L3/R3 and a settings button, plus a floating show/hide bubble.
+- A complete customizable touch pad: two sticks, d-pad, A/B/X/Y, LB/RB, LT/RT,
+  Back, Start, L3/R3 and a settings button, plus a floating show/hide bubble
+  and an interactive **Touch Layout & Button Remapping Editor** (drag to move,
+  per-control sizing, opacity, stick swap, and per-button/D-pad remapping).
 - A 1.9 GB-class game-data layout under the app's external files directory.
 
 ## Requirements
@@ -140,10 +142,16 @@ disconnecting it brings the touch pad back.
   The right stick turns the selected camera; the **Camera** section's
   **Invert camera left / right** and **Invert camera up / down** flip its axes
   immediately. Unchecked is the standard direction.
-- A touch in the menu needs a normal, brief press; a very quick tap may be
-  treated as a hover by SDL's touch-to-mouse bridge.
-- The Android **Back** button toggles the settings menu instead of leaving the
-  game.
+- **Touch layout & button remapping editor:** open **Settings → Controls →
+  Edit Layout & Remap Buttons** or **long-press the `HIDE / TOUCH` bubble**
+  in-game to drag any of the 17 controls anywhere on screen, adjust individual
+  sizes (`55%`–`165%`), cycle opacity (`100%/80%/60%/40%`), swap Left/Right
+  sticks, remap any button or D-pad direction to any Xbox action (or hide it),
+  and reset individual controls or the whole layout. Changes save automatically.
+- Settings menu taps work on the first tap across tabs, dropdowns, checkboxes,
+  and buttons.
+- The Android **Back** button exits the touch layout editor when active, or
+  toggles the settings menu during gameplay instead of leaving the game.
 - **HIDE** is a small overlay and never covers the HP bar or the game's
   top-left HUD.
 
@@ -176,13 +184,13 @@ Known differences from the Windows build:
   build is added.
 - **EU release**: the current APK is built for the USA XBE. The EU executable
   path is not packaged yet.
-- **Windows-only graphics**: DLSS, DXR ray tracing, frame generation and HDR
-  output are not available on Android. The advanced renderer's basic path,
-  widescreen, HD textures, anisotropic filtering, FSR-style TAA/upscaling
-  settings and the settings menu are present.
-- **Display mode/resolution** rows in the Display tab describe desktop
-  behaviour; Android always presents full-screen. V-Sync and render scale
-  remain meaningful.
+- **Windows-only graphics**: DLSS, DXR ray tracing, frame generation, ambient
+  occlusion, TAA/upscaling and HDR output are PC-D3D12 only and are hidden on
+  Android. Android's **Display** and **Graphics** tabs expose **Widescreen**
+  (`Off (4:3)`, `16:9`, `16:10`, and Hor+ **Full screen** for ultra-wide
+  `19.5:9` / `20:9` / `21:9` phones), **Render scale** (`50%`–`150%` with a
+  live internal `WxH` pixel readout), **V-Sync**, **FPS counter**, anisotropic
+  filtering, HD texture packs and surface depth.
 
 The APK and generated game code are for your own use with your own disc. Do
 not distribute an APK containing game code or game data.

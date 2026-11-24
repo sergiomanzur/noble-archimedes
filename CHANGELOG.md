@@ -1,5 +1,21 @@
 # Changelog
 
+## v1.2.0 — Android widescreen, render-scale, and touch layout & remapping editor (2026-11-23)
+
+- **Fix Android widescreen & portrait-panel render scaling (`settings.cpp`, `android_main.cpp`, `vulkan.cpp`):**
+  - Normalize Android display dimensions to landscape (`width >= height`) using live `WindowPixels()` rather than portrait-native `SDL_GetDesktopDisplayMode()` values (e.g. `1080×2408` phones). Previously, `Widescreen()` permanently latched `false` on portrait panels (preventing widescreen from ever engaging) and `RenderScale()` scaled against the tall portrait height (`2408` instead of `1080`), causing `75% → 100%` render scale to render at `1806p → 2408p` and drop mid-range Mali GPUs from 60 FPS to 30 FPS.
+  - Add Hor+ **Full screen** widescreen (`widescreen_aspect = 1`) filling ultra-wide `19.5:9` / `20:9` / `21:9` phones edge-to-edge without stretching, alongside `16:9`, `16:10`, and `Off (4:3)`.
+  - Default new Android installs to `Full screen` widescreen and `67% (720p)` render scale.
+- **Clean up Android Display & Graphics settings (`menu.cpp`):**
+  - Hide broken desktop-only controls on Android (`Display mode`, `Resolution`, `HDR`, and PC-D3D12-only `TAA`/`Upscaling`/`Sharpening`/`Ambient occlusion`/`Ray tracing`).
+  - Expose working **Widescreen**, **Render scale** (`50%`–`150%`) with a live internal `WxH` pixel readout, **V-Sync** (with a note on 60 → 30 FPS drops under mobile V-Sync), and **FPS counter**.
+- **Interactive mobile Touch Controls Layout & Button Remapping Editor (`TouchControlsView.java`, `NobleActivity.java`, `android_native.cpp`):**
+  - Accessible from the top of **Settings → Controls → Edit Layout & Remap Buttons** or by **long-pressing the `HIDE/TOUCH` bubble** in-game.
+  - Drag to reposition any of the 17 controls (individual face buttons, triggers/shoulders, `BACK/MENU/START`, `L3/R3`, sticks, D-pad, and `HIDE/TOUCH` bubble), resize individually (`55%`–`165%`), cycle global opacity (`100%/80%/60%/40%`), swap Left/Right sticks, remap any button or individual D-pad direction to any Xbox action (or disable/hide it), and reset either the selected control or the entire layout.
+  - Saves custom layouts, sizes, opacity, and remappings persistently in `SharedPreferences`; toolbar sits in the clear band below `BACK/MENU/START` and auto-flips to the bottom when editing upper-half controls.
+- **Fix Android Settings single-tap input (`imgui_sdl.cpp`):** forward `ImGuiMouseSource_TouchScreen` for `SDL_TOUCH_MOUSEID` events and sync pointer coordinates on mouse button events, fixing Dear ImGui's touch hover-before-click issue so tabs, dropdowns, and buttons respond cleanly on the first tap.
+- Windows x64 and Linux x86_64 builds are unchanged from v1.0.0; only the Android arm64 APK and companion Source archive are published for v1.2.0.
+
 ## v1.1.0 — Android Mali GPU support and native Vulkan 1.1 backend (2026-11-23)
 
 - **ARM Mali GPU support on Android:** replace `vkd3d 2.1` on Android with a direct native **Vulkan 1.1** `gpu::Backend` (`android/app/src/main/cpp/vulkan.cpp`) and in-process static **`glslang 16.0.0`** HLSL-to-SPIR-V compiler (`vk_shader.{h,cpp}`). Resolves immediate startup crashes on ARM Mali devices (such as Mali-G57 / Dimensity 700 / 4 GB phones) while keeping full support for Adreno and desktop-class mobile Vulkan drivers.

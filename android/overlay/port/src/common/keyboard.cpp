@@ -262,7 +262,7 @@ void ApplySetting(const std::string& entry) {
     } else if (key == "render_percent") st.render_percent = n;
     else if (key == "anisotropic_filtering") st.aniso = n;
     else if (key == "widescreen") st.widescreen = on;
-    else if (key == "widescreen_aspect") st.widescreen_aspect = n == 1610 ? 1610 : 169;
+    else if (key == "widescreen_aspect") st.widescreen_aspect = (n == 1610 || n == 1) ? n : 169;
     else if (key == "vsync") st.vsync = on;
     else if (key == "fps_cap") st.fps_cap = n;
     else if (key == "hdr") st.hdr = on;

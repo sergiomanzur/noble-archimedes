@@ -27,6 +27,7 @@ struct TouchState {
 
 TouchState g_touch;
 std::atomic<bool> g_booted{false};
+std::atomic<bool> g_touch_editor_requested{false};
 
 static inline int MergeStick(int physical, int touch) {
     return std::abs(touch) >= std::abs(physical) ? touch : physical;
@@ -37,6 +38,7 @@ bool IsBooted() { return g_booted.load(std::memory_order_acquire); }
 
 void ToggleMenu() { MenuToggle(); }
 bool MenuOpen() { return ::MenuOpen(); }
+void RequestTouchEditor() { g_touch_editor_requested.store(true, std::memory_order_release); }
 
 void MergeTouchPad(int port, input::Pad& pad) {
     if (port != 0 || !g_touch.active.load(std::memory_order_relaxed)) return;
@@ -110,4 +112,9 @@ Java_com_noblearchimedes_NobleActivity_nativeIsReady(JNIEnv*, jclass) {
 extern "C" JNIEXPORT void JNICALL
 Java_com_noblearchimedes_NobleActivity_nativeTouchVisibilityChanged(JNIEnv*, jclass, jboolean) {
     // The Java view persists this; native code only needs the live pad state.
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_noblearchimedes_NobleActivity_nativeConsumeTouchEditorRequest(JNIEnv*, jclass) {
+    return noble_android::g_touch_editor_requested.exchange(false, std::memory_order_acq_rel) ? JNI_TRUE : JNI_FALSE;
 }

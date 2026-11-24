@@ -143,6 +143,10 @@ public class NobleActivity extends SDLActivity {
     @Override
     @SuppressWarnings("deprecation")
     public void onBackPressed() {
+        if (touchControls != null && touchControls.isEditMode()) {
+            touchControls.exitEditMode();
+            return;
+        }
         // Back never kills a running session: it opens/closes the game's
         // settings menu, as the controller's menu combo does.
         if (nativeMenuOpen()) {
@@ -185,4 +189,5 @@ public class NobleActivity extends SDLActivity {
     public static native boolean nativeMenuOpen();
     public static native boolean nativeIsReady();
     public static native void nativeTouchVisibilityChanged(boolean visible);
+    public static native boolean nativeConsumeTouchEditorRequest();
 }

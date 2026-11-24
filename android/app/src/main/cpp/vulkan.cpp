@@ -1373,8 +1373,10 @@ bool VulkanBackend::Init(uint32_t width, uint32_t height) {
         ext_->Settings();
         ext_->Reset(*this);
     }
-    LOGR("vulkan: ready (%ux%u guest, %ux%u swap, scale %.3f, aspect %.3f, %s, %s, BC %s)",
-         width, height, swap_extent_.width, swap_extent_.height, scale_, aspect_,
+    LOGR("vulkan: ready (%ux%u guest, %ux%u target, %ux%u swap, scale %.3f, aspect %.3f, wide %d, %s, %s, BC %s)",
+         width, height,
+         uint32_t(std::lround(width * scale_ * aspect_)), uint32_t(std::lround(height * scale_)),
+         swap_extent_.width, swap_extent_.height, scale_, aspect_, int(app::Widescreen()),
          dynamic_ ? "dynamic rendering" : "render passes",
          timeline_ok_ ? "timeline semaphores" : "fences",
          bc_ ? "GPU" : "CPU DXT");
@@ -3809,7 +3811,9 @@ void VulkanBackend::ApplySettings() {
     scale_ = want;
     aspect_ = aspect;
     if (ext_) ext_->Reset(*this);
-    LOGR("vulkan: render scale %.3f, aspect %.3f", scale_, aspect_);
+    LOGR("vulkan: render scale %.3f, aspect %.3f (%ux%u target, wide %d)", scale_, aspect_,
+         uint32_t(std::lround(guest_w_ * scale_ * aspect_)), uint32_t(std::lround(guest_h_ * scale_)),
+         int(app::Widescreen()));
 }
 
 void VulkanBackend::SavePipelineCache() {

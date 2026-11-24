@@ -28,6 +28,9 @@
 #include "core/input.h"
 #include "gpu/backend.h"
 #include "gpu/raytrace.h"
+#ifdef __ANDROID__
+#include "noble_android.h"
+#endif
 
 // game settings beside the runtime's, in the settings file (game_info.cpp lists them)
 bool g_fps_counter = false;
@@ -254,8 +257,70 @@ void HdrRows(bool& save) {
     ImGui::EndDisabled();
 }
 
+#ifdef __ANDROID__
+std::string FullScreenAspectLabel() {
+    app::Mode m = app::Output();
+    if (m.width && m.height) {
+        float ratio = std::clamp(float(m.width) / float(m.height), 4.0f / 3.0f, 21.0f / 9.0f);
+        float by9 = ratio * 9.0f;
+        char buf[48];
+        if (std::fabs(by9 - std::round(by9)) < 0.12f)
+            std::snprintf(buf, sizeof(buf), "Full screen (%d:9)", int(std::lround(by9)));
+        else
+            std::snprintf(buf, sizeof(buf), "Full screen (%.1f:9)", by9);
+        return buf;
+    }
+    return "Full screen";
+}
+
+void AndroidWidescreenRow(bool& save) {
+    app::Settings& s = app::Get();
+    Row("Widescreen", "Shows more of the world at the sides with nothing stretched. Full screen fills ultra-wide "
+                      "phones (19.5:9, 20:9, 21:9) edge to edge; 16:9 and 16:10 match standard displays; Off (4:3) "
+                      "shows the original console frame.");
+    uint32_t wide = s.widescreen ? s.widescreen_aspect : 0;
+    if (Choice<uint32_t>("##wide", wide, {0, 169, 1610, 1}, {"Off (4:3)", "16:9", "16:10", FullScreenAspectLabel()})) {
+        s.widescreen = wide != 0;
+        if (wide) s.widescreen_aspect = wide;
+        save = true;
+    }
+}
+
+void AndroidRenderScaleRow(bool& save) {
+    app::Settings& s = app::Get();
+    Row("Render scale", "Internal rendering height relative to your screen. 67%-75% gives smooth 60 FPS on mid-range "
+                        "and Mali GPUs; 100% renders at full native height.");
+    std::vector<uint32_t> vals = {50, 60, 67, 75, 85, 100, 125, 150};
+    std::vector<std::string> names = {"50%", "60%", "67% (720p)", "75%", "85%", "100% (Native)", "125%", "150%"};
+    if (std::find(vals.begin(), vals.end(), s.render_percent) == vals.end()) {
+        vals.push_back(s.render_percent);
+        names.push_back(std::to_string(s.render_percent) + "%");
+    }
+    ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x * 0.52f);
+    save |= Choice<uint32_t>("##scale", s.render_percent, vals, names);
+    ImGui::SameLine();
+    float sc = app::RenderScale(480);
+    float aspect = app::Widescreen() ? app::WideAspect() / (4.0f / 3.0f) : 1.0f;
+    uint32_t rw = std::max(1u, uint32_t(std::lround(640.0f * sc * aspect)));
+    uint32_t rh = std::max(1u, uint32_t(std::lround(480.0f * sc)));
+    ImGui::TextDisabled("%ux%u", rw, rh);
+}
+#endif
+
 void DisplayTab(bool& save) {
     app::Settings& s = app::Get();
+#ifdef __ANDROID__
+    if (!Section("Screen", "display")) return;
+    AndroidWidescreenRow(save);
+    AndroidRenderScaleRow(save);
+    Row("V-Sync", "Locks frames to the display refresh rate. Turning V-Sync off can prevent sudden 60 -> 30 FPS "
+                  "drops on Mali and other mobile GPUs when a frame briefly exceeds 16 ms.");
+    save |= Check("##vsync", &s.vsync);
+    Row("FPS counter", "Shows the current frame rate in the top-left corner.");
+    save |= Check("##fpsc_disp", &g_fps_counter);
+    ImGui::EndTable();
+    return;
+#endif
     if (!Section("Screen", "display")) return;
     Row("Display mode", "Borderless fills the monitor without changing its mode and switches away instantly. "
                         "Fullscreen switches the monitor to the resolution below.");
@@ -296,6 +361,24 @@ void DisplayTab(bool& save) {
 
 void GraphicsTab(bool& save) {
     app::Settings& s = app::Get();
+#ifdef __ANDROID__
+    if (Section("Quality", "detail")) {
+        AndroidRenderScaleRow(save);
+        Row("Anisotropic filtering", "Sharper textures at oblique angles (applied when supported by the GPU driver).");
+        save |= Choice<uint32_t>("##aniso", s.aniso, {0, 2, 4, 8, 16}, {"Off", "2x", "4x", "8x", "16x"});
+        ImGui::EndTable();
+    }
+    if (Section("HD texture pack", "pack")) {
+        Row("HD texture pack", "Uses an HD texture pack placed in files/textures/ in place of the game's own "
+                               "textures. Changes take effect immediately.");
+        save |= Check("##pack", &g_texture_pack);
+        Row("Surface depth", "HD texture pack parallax depth on walls and floors (requires material maps). Off "
+                             "keeps surfaces flat for best mobile performance.");
+        save |= Choice<uint32_t>("##depth", g_surface_depth, {0, 1, 2}, {"Off", "Low", "High"});
+        ImGui::EndTable();
+    }
+    return;
+#endif
     if (!Section("Anti-aliasing and upscaling", "aa")) return;
 #ifdef _WIN32
     Row("Anti-aliasing", "Smooth, steady edges on the 3D world, gathered over the frames: AMD FSR on any graphics card, "
@@ -489,6 +572,9 @@ void GraphicsTab(bool& save) {
 void ViewTab(bool& save) {
     app::Settings& s = app::Get();
     if (!Section("Widescreen", "wide")) return;
+#ifdef __ANDROID__
+    AndroidWidescreenRow(save);
+#else
     Row("Widescreen", "More of the world at the sides, nothing stretched: 16:9 for a 16:9 screen, 16:10 for a 16:10 "
                       "one (1920x1200). The HUD and menus stay 4:3 in the middle. Off shows the game 4:3, as on a "
                       "4:3 TV.");
@@ -500,6 +586,7 @@ void ViewTab(bool& save) {
             save = true;
         }
     }
+#endif
     Row("HUD at the screen edges", "Widescreen: the health and magic bars and the rest of the HUD in the screen's "
                                    "corners, as on a 4:3 screen, rather than at the corners of the 4:3 middle.");
     save |= Check("##hud", &g_hud_edges);
@@ -567,6 +654,18 @@ void GameTab(bool& save) {
 }
 
 void ControlsTab(bool& save) {
+#ifdef __ANDROID__
+    if (Section("Touch controls", "touch_cfg")) {
+        Row("Layout & remapping", "Drag any on-screen button or stick to reposition it, resize individual controls, "
+                                  "adjust opacity, swap sticks, or remap any touch button to any Xbox action.");
+        if (ImGui::Button("Edit Layout & Remap Buttons")) {
+            g_open = false;
+            noble_android::RequestTouchEditor();
+        }
+        Track();
+        ImGui::EndTable();
+    }
+#endif
     save |= modern::DrawSettings();
     if (Section("Controller", "layout")) {
         Row("Button layout", "PS2: the PS2's button icons (from an HD texture pack made from the PS2 game) and its "
@@ -601,10 +700,11 @@ void ControlsTab(bool& save) {
     ImGui::TextWrapped("The on-screen pad, a controller, or both together play as player 1:");
     ImGui::Spacing();
     static const char* kAndroidKeys[][2] = {
-        {"Touch: left stick", "Move"},
-        {"Touch: right stick", "Camera"},
-        {"Touch: D-pad / faces", "D-pad, A, B, X, Y"},
-        {"Touch: shoulders", "White / black, left / right trigger"},
+        {"Touch: left stick", "Move (swappable in editor)"},
+        {"Touch: right stick", "Camera (swappable in editor)"},
+        {"Touch: D-pad / faces", "D-pad, A, B, X, Y (remappable)"},
+        {"Touch: shoulders", "White / black, left / right trigger (remappable)"},
+        {"Touch: long-press HIDE/TOUCH", "Open touch layout & remapping editor"},
         {"Touch: MENU", "Open or close this menu"},
         {"Start + Back (controller)", "Open or close this menu"},
         {"L3 + R3 (controller)", "Show or hide the touch controls"},
@@ -686,6 +786,11 @@ void Defaults() {
     app::Settings& s = app::Get();
     d.join_ip = s.join_ip;
     d.release = s.release;  // the release the launcher plays: a choice of game files, not a setting
+#ifdef __ANDROID__
+    d.render_percent = 67;
+    d.widescreen = true;
+    d.widescreen_aspect = 1;  // Full screen on Android
+#endif
     s = d;
     g_fps_counter = false;
     g_pause_on_focus_loss = true;

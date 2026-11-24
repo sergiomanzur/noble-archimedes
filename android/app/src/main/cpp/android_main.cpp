@@ -316,9 +316,12 @@ int main(int argc, char** argv) {
 
     // One log a session, under the app's external files directory.
     logx::Init((app::ExeDir() / "logs").string(), app::kGame.log, false);
-    // Mobile first-run default (~720p on 1080p phones to keep RAM and GPU load comfortable on
-    // 4 GB devices); overwritten by the player's saved castlevania.toml once present.
+    // Mobile first-run defaults (~720p on 1080p phones to keep RAM and GPU load comfortable on
+    // 4 GB devices, plus full-screen Hor+ widescreen for 19.5:9 / 20:9 phone panels); overwritten
+    // by the player's saved castlevania.toml once present.
     app::Get().render_percent = 67;
+    app::Get().widescreen = true;
+    app::Get().widescreen_aspect = 1;
     app::Load();
     if (app::kGame.init) app::kGame.init();
 

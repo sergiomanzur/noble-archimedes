@@ -137,11 +137,17 @@ void ImGuiEvent(const SDL_Event& e) {
     switch (e.type) {
         case SDL_EVENT_MOUSE_MOTION: {
             ImVec2 p = Pixels(g_imgui_window, e.motion.x, e.motion.y);
+            io.AddMouseSourceEvent(e.motion.which == SDL_TOUCH_MOUSEID ? ImGuiMouseSource_TouchScreen
+                                                                       : ImGuiMouseSource_Mouse);
             io.AddMousePosEvent(p.x, p.y);
             break;
         }
         case SDL_EVENT_MOUSE_BUTTON_DOWN:
         case SDL_EVENT_MOUSE_BUTTON_UP: {
+            ImVec2 p = Pixels(g_imgui_window, e.button.x, e.button.y);
+            io.AddMouseSourceEvent(e.button.which == SDL_TOUCH_MOUSEID ? ImGuiMouseSource_TouchScreen
+                                                                       : ImGuiMouseSource_Mouse);
+            io.AddMousePosEvent(p.x, p.y);
             int button = e.button.button == SDL_BUTTON_LEFT ? 0 : e.button.button == SDL_BUTTON_RIGHT ? 1
                          : e.button.button == SDL_BUTTON_MIDDLE                                       ? 2
                                                                                                       : -1;

@@ -20,4 +20,7 @@ bool IsBooted();
 void ToggleMenu();
 bool MenuOpen();
 
+// Triggered from the ImGui Controls tab to open the on-screen touch layout/remapping editor.
+void RequestTouchEditor();
+
 }  // namespace noble_android
